@@ -29,9 +29,10 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
-class CapResult(val full: Bitmap, val x: Int, val y: Int, val crop: Bitmap?)
+class CapResult(val full: Bitmap, val x: Int, val y: Int, val crop: Bitmap?, val x2: Int = 0, val y2: Int = 0)
 
-class PickView(ctx: Context, private val bmp: Bitmap, private val region: Boolean) : View(ctx) {
+class PickView(ctx: Context, private val bmp: Bitmap, private val region: Boolean, private val line: Boolean = false) : View(ctx) {
+    private val drag = region || line
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
     private var x0 = 0f
     private var y0 = 0f
@@ -42,8 +43,8 @@ class PickView(ctx: Context, private val bmp: Bitmap, private val region: Boolea
     override fun onTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> { x0 = e.x; y0 = e.y; x1 = e.x; y1 = e.y; has = true }
-            MotionEvent.ACTION_MOVE -> { if (region) { x1 = e.x; y1 = e.y } else { x0 = e.x; y0 = e.y } }
-            MotionEvent.ACTION_UP -> { if (region) { x1 = e.x; y1 = e.y } else { x0 = e.x; y0 = e.y } }
+            MotionEvent.ACTION_MOVE -> { if (drag) { x1 = e.x; y1 = e.y } else { x0 = e.x; y0 = e.y } }
+            MotionEvent.ACTION_UP -> { if (drag) { x1 = e.x; y1 = e.y } else { x0 = e.x; y0 = e.y } }
         }
         invalidate()
         return true
@@ -64,6 +65,12 @@ class PickView(ctx: Context, private val bmp: Bitmap, private val region: Boolea
             p.style = Paint.Style.STROKE
             p.color = Pal.OK
             c.drawRect(r, p)
+        } else if (line) {
+            p.style = Paint.Style.STROKE
+            p.color = Pal.OK
+            c.drawLine(x0, y0, x1, y1, p)
+            c.drawCircle(x0, y0, 18f, p)
+            c.drawCircle(x1, y1, 18f, p)
         } else {
             p.style = Paint.Style.STROKE
             p.color = Pal.OK
@@ -77,6 +84,10 @@ class PickView(ctx: Context, private val bmp: Bitmap, private val region: Boolea
         if (!has || width == 0 || height == 0) return null
         val sx = bmp.width / width.toFloat()
         val sy = bmp.height / height.toFloat()
+        if (line) {
+            if (Math.abs(x1 - x0) < 20f) return null
+            return CapResult(bmp, (x0 * sx).toInt().coerceIn(0, bmp.width - 1), (y0 * sy).toInt().coerceIn(0, bmp.height - 1), null, (x1 * sx).toInt().coerceIn(0, bmp.width - 1), (y1 * sy).toInt().coerceIn(0, bmp.height - 1))
+        }
         if (!region) {
             return CapResult(bmp, (x0 * sx).toInt().coerceIn(0, bmp.width - 1), (y0 * sy).toInt().coerceIn(0, bmp.height - 1), null)
         }
@@ -275,7 +286,7 @@ class BotService : AccessibilityService() {
     }
 
     // ---------- captura (ponto ou região) ----------
-    fun startCapture(bannerText: String, pickText: String, region: Boolean, done: (CapResult) -> Unit) {
+    fun startCapture(bannerText: String, pickText: String, region: Boolean, line: Boolean = false, done: (CapResult) -> Unit) {
         ui.post {
             val w = wm ?: return@post
             if (engine.running) { toast("Pare o bot antes de configurar."); return@post }
@@ -293,7 +304,7 @@ class BotService : AccessibilityService() {
             b1.topMargin = dp(10); b1.rightMargin = dp(6)
             val b2 = LinearLayout.LayoutParams(0, WC, 1f)
             b2.topMargin = dp(10); b2.leftMargin = dp(6)
-            row.addView(button("Capturar agora") { grab(pickText, region, done) }, b1)
+            row.addView(button("Capturar agora") { grab(pickText, region, line, done) }, b1)
             row.addView(button("Cancelar", Pal.BAD) { closeBanner() }, b2)
             box.addView(row, LinearLayout.LayoutParams(MP, WC))
             val lp = overlayLp(WC, WC, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
@@ -304,7 +315,7 @@ class BotService : AccessibilityService() {
         }
     }
 
-    private fun grab(pickText: String, region: Boolean, done: (CapResult) -> Unit) {
+    private fun grab(pickText: String, region: Boolean, line: Boolean, done: (CapResult) -> Unit) {
         closeBanner()
         val old = panel?.visibility ?: View.VISIBLE
         panel?.visibility = View.INVISIBLE
@@ -316,20 +327,20 @@ class BotService : AccessibilityService() {
                     if (bmp == null) {
                         toast("Não consegui capturar a tela. Precisa do Android 11+ e o jogo não pode bloquear capturas.")
                     } else {
-                        showPick(pickText, region, bmp, done)
+                        showPick(pickText, region, line, bmp, done)
                     }
                 }
             }.start()
         }, 400)
     }
 
-    private fun showPick(pickText: String, region: Boolean, bmp: Bitmap, done: (CapResult) -> Unit) {
+    private fun showPick(pickText: String, region: Boolean, line: Boolean, bmp: Bitmap, done: (CapResult) -> Unit) {
         val w = wm ?: return
         val dm = DisplayMetrics()
         @Suppress("DEPRECATION")
         w.defaultDisplay.getRealMetrics(dm)
         val root = FrameLayout(this)
-        val pv = PickView(this, bmp, region)
+        val pv = PickView(this, bmp, region, line)
         root.addView(pv, FrameLayout.LayoutParams(MP, MP))
         val tip = text(pickText, 14f)
         tip.setPadding(dp(14), dp(10), dp(14), dp(10))
@@ -348,7 +359,7 @@ class BotService : AccessibilityService() {
         bar.addView(button("Confirmar", Pal.OK) {
             val sel = pv.selection()
             if (sel == null) {
-                toast(if (region) "Arraste um retângulo sobre a imagem." else "Toque no ponto desejado.")
+                toast(if (region) "Arraste um retângulo sobre a imagem." else if (line) "Arraste uma linha ao longo da barra." else "Toque no ponto desejado.")
             } else {
                 closePick()
                 try { done(sel) } catch (e: Exception) { toast("Erro ao salvar: ${e.message}") }

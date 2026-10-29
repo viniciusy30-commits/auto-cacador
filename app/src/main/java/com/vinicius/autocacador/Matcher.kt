@@ -95,6 +95,58 @@ object Matcher {
         return best
     }
 
+    /** Todos os acertos, sem repetir o mesmo lugar. */
+    fun findAll(g: Gray, t: Tpl, x0: Int, y0: Int, x1: Int, y1: Int, minScore: Float): List<Hit> {
+        val n = t.v.size
+        if (n < 12) return emptyList()
+        val tol = 30
+        val maxMiss = ((1f - minScore) * n).toInt()
+        val stage = minOf(24, n)
+        val stageAllowed = (maxMiss.toFloat() * stage / n * 1.6f).toInt() + 2
+        val d = g.d
+        val gw = g.w
+        val raw = ArrayList<Hit>()
+        var y = y0
+        while (y <= y1 - t.h && raw.size < 3000) {
+            var x = x0
+            while (x <= x1 - t.w) {
+                var miss = 0
+                var i = 0
+                while (i < n) {
+                    val df = (d[(y + t.ys[i]) * gw + x + t.xs[i]].toInt() and 255) - t.v[i]
+                    if (df > tol || df < -tol) {
+                        miss++
+                        if (miss > maxMiss) break
+                    }
+                    i++
+                    if (i == stage && miss > stageAllowed) break
+                }
+                if (i >= n && miss <= maxMiss) raw.add(Hit(x + t.w / 2, y + t.h / 2, 1f - miss.toFloat() / n))
+                x++
+            }
+            y++
+        }
+        raw.sortByDescending { it.score }
+        val out = ArrayList<Hit>()
+        for (h in raw) {
+            if (out.none { Math.abs(it.x - h.x) < t.w / 2 + 2 && Math.abs(it.y - h.y) < t.h / 2 + 2 }) out.add(h)
+            if (out.size >= 12) break
+        }
+        return out
+    }
+
+    /** Quanto da barra (0..100) ainda está cheio, medindo da esquerda para a direita. */
+    fun fillPct(b: Bitmap, ax: Int, ay: Int, bx: Int, by: Int, ref: Int): Int {
+        val n = 24
+        var ok = 0
+        for (k in 0 until n) {
+            val x = ax + (bx - ax) * k / (n - 1)
+            val y = ay + (by - ay) * k / (n - 1)
+            if (!far(avg(b, x, y), ref, 110)) ok++
+        }
+        return ok * 100 / n
+    }
+
     /** Cor média 3x3 ao redor do ponto. */
     fun avg(b: Bitmap, px: Int, py: Int): Int {
         var r = 0
@@ -115,10 +167,10 @@ object Matcher {
         return (0xFF shl 24) or ((r / k) shl 16) or ((g / k) shl 8) or (bl / k)
     }
 
-    fun far(a: Int, b: Int): Boolean {
+    fun far(a: Int, b: Int, lim: Int = 90): Boolean {
         val d = Math.abs(((a shr 16) and 255) - ((b shr 16) and 255)) +
             Math.abs(((a shr 8) and 255) - ((b shr 8) and 255)) +
             Math.abs((a and 255) - (b and 255))
-        return d > 90
+        return d > lim
     }
 }

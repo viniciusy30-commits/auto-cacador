@@ -3,6 +3,7 @@ package com.vinicius.autocacador
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import java.io.File
+import java.util.Random
 
 class BotEngine(private val svc: BotService) {
     @Volatile var running = false
@@ -12,6 +13,7 @@ class BotEngine(private val svc: BotService) {
     private class Found(val t: T, val hit: Matcher.Hit)
 
     private val sc = 2
+    private val rnd = Random()
 
     fun start() {
         if (running) return
@@ -61,18 +63,35 @@ class BotEngine(private val svc: BotService) {
         return out
     }
 
-    private fun best(g: Gray, list: List<T>, x0: Int, y0: Int, x1: Int, y1: Int, min: Float): Found? {
+    /** Escolhe o acerto mais perto do centro (nearest) ou o mais parecido com a foto. */
+    private fun best(
+        g: Gray, list: List<T>, x0: Int, y0: Int, x1: Int, y1: Int, min: Float,
+        nearest: Boolean, skip: (Int, Int) -> Boolean
+    ): Found? {
+        val cx = (x0 + x1) / 2
+        val cy = (y0 + y1) / 2
         var b: Found? = null
+        var bd = Long.MAX_VALUE
         for (t in list) {
             if (!running) break
-            val h = Matcher.find(g, t.tpl, x0, y0, x1, y1, min) ?: continue
-            if (b == null || h.score > b.hit.score) b = Found(t, h)
+            for (h in Matcher.findAll(g, t.tpl, x0, y0, x1, y1, min)) {
+                if (skip(h.x * sc, h.y * sc)) continue
+                val dx = (h.x - cx).toLong()
+                val dy = (h.y - cy).toLong()
+                val d = if (nearest) dx * dx + dy * dy else ((1f - h.score) * 1000000f).toLong()
+                if (d < bd) {
+                    bd = d
+                    b = Found(t, h)
+                }
+            }
         }
         return b
     }
 
     private fun actions(bmp: Bitmap, monster: Boolean, lastUse: HashMap<String, Long>) {
         val n = now()
+        val bw = bmp.width
+        val bh = bmp.height
         for (a in Store.cfg.actions) {
             val b = a.btn ?: continue
             if (!a.enabled) continue
@@ -81,12 +100,17 @@ class BotEngine(private val svc: BotService) {
                 monster
             } else {
                 val bar = a.bar
-                if (bar == null) true else Matcher.far(
-                    Matcher.avg(bmp, (bar.fx * bmp.width).toInt(), (bar.fy * bmp.height).toInt()), a.barColor
-                )
+                val b2 = a.bar2
+                if (bar == null) {
+                    true
+                } else if (b2 != null) {
+                    Matcher.fillPct(bmp, (bar.fx * bw).toInt(), (bar.fy * bh).toInt(), (b2.fx * bw).toInt(), (b2.fy * bh).toInt(), a.barColor) < a.pct
+                } else {
+                    Matcher.far(Matcher.avg(bmp, (bar.fx * bw).toInt(), (bar.fy * bh).toInt()), a.barColor)
+                }
             }
             if (fire) {
-                svc.tap(b.fx * bmp.width, b.fy * bmp.height)
+                svc.tap(b.fx * bw, b.fy * bh)
                 lastUse[a.id] = now()
                 nap(150)
             }
@@ -107,8 +131,12 @@ class BotEngine(private val svc: BotService) {
         var travelUntil = 0L
         var destIdx = 0
         var fails = 0
+        var focusX = -9999
+        var focusY = -9999
+        var focusSince = 0L
         val lastUse = HashMap<String, Long>()
-        val ignore = ArrayList<LongArray>()
+        val monIgn = ArrayList<LongArray>()
+        val itemIgn = ArrayList<LongArray>()
         val clicks = HashMap<Long, Int>()
 
         while (running) {
@@ -131,28 +159,32 @@ class BotEngine(private val svc: BotService) {
             val x1 = g.w - g.w * cfg.mRight / 100
             val y0 = g.h * cfg.mTop / 100
             val y1 = g.h - g.h * cfg.mBottom / 100
-            val mon = best(g, mons, x0, y0, x1, y1, cfg.monScore / 100f)
-            var item: Found? = if (items.isNotEmpty() && running) best(g, items, x0, y0, x1, y1, cfg.itemScore / 100f) else null
-            ignore.removeAll { it[2] < t0 }
-            val itf = item
-            if (itf != null && ignore.any { Math.abs(it[0] - itf.hit.x * sc) < 50 && Math.abs(it[1] - itf.hit.y * sc) < 50 }) item = null
+            monIgn.removeAll { it[2] < t0 }
+            itemIgn.removeAll { it[2] < t0 }
+            val mon = best(g, mons, x0, y0, x1, y1, cfg.monScore / 100f, cfg.nearest) { x, y ->
+                monIgn.any { Math.abs(it[0] - x) < 70 && Math.abs(it[1] - y) < 70 }
+            }
+            val item: Found? = if (items.isNotEmpty() && running) {
+                best(g, items, x0, y0, x1, y1, cfg.itemScore / 100f, true) { x, y ->
+                    itemIgn.any { Math.abs(it[0] - x) < 50 && Math.abs(it[1] - y) < 50 }
+                }
+            } else null
             if (item == null) clicks.clear()
             actions(bmp, mon != null, lastUse)
             bmp.recycle()
             if (!running) break
 
-            val it2 = item
-            if (it2 != null && (cfg.lootFirst || mon == null)) {
-                val rx = it2.hit.x * sc
-                val ry = it2.hit.y * sc
+            if (item != null && (cfg.lootFirst || mon == null)) {
+                val rx = item.hit.x * sc
+                val ry = item.hit.y * sc
                 val key = (rx / 40).toLong() * 100000L + (ry / 40)
                 val c = (clicks[key] ?: 0) + 1
                 clicks[key] = c
                 if (c > 3) {
-                    ignore.add(longArrayOf(rx.toLong(), ry.toLong(), t0 + 20000))
+                    itemIgn.add(longArrayOf(rx.toLong(), ry.toLong(), t0 + 20000))
                     clicks.remove(key)
                 } else {
-                    svc.setStatus("Pegando: ${it2.t.t.name}")
+                    svc.setStatus("Pegando: ${item.t.t.name}")
                     svc.tap(rx.toFloat(), ry.toFloat())
                     lastActivity = now()
                     travelUntil = 0
@@ -161,29 +193,63 @@ class BotEngine(private val svc: BotService) {
             } else if (mon != null) {
                 travelUntil = 0
                 lastActivity = t0
+                val mx = mon.hit.x * sc
+                val my = mon.hit.y * sc
+                if (Math.abs(mx - focusX) < 90 && Math.abs(my - focusY) < 90) {
+                    if (cfg.giveUpSec > 0 && t0 - focusSince > cfg.giveUpSec * 1000L) {
+                        monIgn.add(longArrayOf(mx.toLong(), my.toLong(), t0 + 15000))
+                        focusX = -9999
+                        focusY = -9999
+                        svc.setStatus("Desisti deste monstro, procurando outro…")
+                    }
+                } else {
+                    focusX = mx
+                    focusY = my
+                    focusSince = t0
+                }
                 if (t0 - lastClick >= (cfg.reclickSec * 1000).toLong()) {
                     svc.setStatus("Atacando: ${mon.t.t.name}")
-                    svc.tap((mon.hit.x * sc).toFloat(), (mon.hit.y * sc + cfg.offsetPx).toFloat())
+                    svc.tap(mx.toFloat(), (my + cfg.offsetPx).toFloat())
                     lastClick = now()
                 }
             } else if (t0 < travelUntil) {
-                svc.setStatus("Caminhando até o destino…")
-            } else if (t0 - lastActivity > (cfg.noMonsterSec * 1000).toLong() && cfg.mapBtn != null && cfg.dests.isNotEmpty()) {
-                val mp = cfg.mapBtn!!
-                svc.setStatus("Sem monstro: abrindo o mapa…")
-                svc.tap(mp.fx * bw, mp.fy * bh)
-                nap((cfg.mapOpenSec * 1000).toLong())
-                val d = if (cfg.randomDest) cfg.dests.random() else cfg.dests[destIdx++ % cfg.dests.size]
-                svc.setStatus("Indo para outro lugar…")
-                svc.tap(d.fx * bw, d.fy * bh)
-                nap(800)
-                val cl = cfg.mapClose
-                if (cl != null) {
-                    svc.tap(cl.fx * bw, cl.fy * bh)
-                    nap(600)
+                svc.setStatus(if (cfg.useMap) "Caminhando até o destino…" else "Passeando…")
+            } else if (t0 - lastActivity > (cfg.noMonsterSec * 1000).toLong()) {
+                focusX = -9999
+                focusY = -9999
+                if (cfg.useMap && cfg.mapBtn != null && cfg.dests.isNotEmpty()) {
+                    val mp = cfg.mapBtn!!
+                    svc.setStatus("Sem monstro: abrindo o mapa…")
+                    svc.tap(mp.fx * bw, mp.fy * bh)
+                    nap((cfg.mapOpenSec * 1000).toLong())
+                    val d = if (cfg.randomDest) cfg.dests.random() else cfg.dests[destIdx++ % cfg.dests.size]
+                    svc.setStatus("Indo para outro lugar…")
+                    svc.tap(d.fx * bw, d.fy * bh)
+                    nap(800)
+                    val cl = cfg.mapClose
+                    if (cl != null) {
+                        svc.tap(cl.fx * bw, cl.fy * bh)
+                        nap(600)
+                    }
+                    travelUntil = now() + (cfg.travelSec * 1000).toLong()
+                    lastActivity = travelUntil
+                } else {
+                    // passeio: toca no chão perto do personagem (centro da área de busca)
+                    val cxr = (x0 + x1) / 2f * sc
+                    val cyr = (y0 + y1) / 2f * sc
+                    val r = cfg.wanderPct / 100f * bw
+                    var px = cxr
+                    var py = cyr
+                    for (k in 0 until 6) {
+                        px = (cxr + (rnd.nextFloat() * 2f - 1f) * r).coerceIn(x0.toFloat() * sc + 20f, x1.toFloat() * sc - 20f)
+                        py = (cyr + (rnd.nextFloat() * 2f - 1f) * r).coerceIn(y0.toFloat() * sc + 20f, y1.toFloat() * sc - 20f)
+                        if (Math.abs(px - cxr) + Math.abs(py - cyr) > bw * 0.1f) break
+                    }
+                    svc.setStatus("Sem monstro: passeando…")
+                    svc.tap(px, py)
+                    travelUntil = now() + (cfg.wanderSec * 1000).toLong()
+                    lastActivity = travelUntil - (cfg.noMonsterSec * 1000).toLong() + 500L
                 }
-                travelUntil = now() + (cfg.travelSec * 1000).toLong()
-                lastActivity = travelUntil
             } else {
                 svc.setStatus("Rodando… procurando monstro")
             }

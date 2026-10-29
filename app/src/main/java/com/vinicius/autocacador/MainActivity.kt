@@ -261,6 +261,11 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        val rc = card()
+        rc.put(text("Dicas para o Rucoy Online", 16f, Pal.TXT, true), 0)
+        rc.put(text("• Os botões da esquerda do jogo são as poções e habilidades: defina cada um na aba Ações.\n• Para atacar basta tocar no monstro; para pegar item, tocar nele; para andar, tocar no chão. É isso que o app faz.\n• O personagem fica no centro da tela, por isso o app ataca o monstro mais perto do centro.\n• Em Ajustes há um botão com valores iniciais do Rucoy.\n• Bots costumam ser proibidos pelas regras de jogos online e podem causar banimento. Use por sua conta e risco.", 12f, Pal.SUB), 8)
+        add(rc)
+
         val g = card()
         g.put(text("Passo a passo", 16f, Pal.TXT, true), 0)
         g.put(text(
@@ -268,7 +273,7 @@ class MainActivity : AppCompatActivity() {
                 "2. Alvos > \"Capturar nome de monstro\": abra o jogo com o monstro na tela, toque em \"Capturar agora\" e arraste um retângulo bem justo em volta do NOME dele. Capture um nome para cada tipo de monstro.\n\n" +
                 "3. (Opcional) Alvos > \"Capturar item\": faça o mesmo com a imagem do item caído no chão.\n\n" +
                 "4. Ações: adicione poção de vida, de mana e skills. Defina onde fica cada botão.\n\n" +
-                "5. Mapa: defina o botão que abre o mapa e os lugares para onde ir quando não houver monstro.\n\n" +
+                "5. Mapa: sem monstros o app passeia sozinho tocando no chão. Se preferir, ligue o uso do mapa e marque o botão e os destinos.\n\n" +
                 "6. Ajustes: regule a sensibilidade e os tempos. Cada opção tem uma explicação.\n\n" +
                 "7. Abra o jogo e toque em ▶ no painel flutuante. Para parar, toque em ■.\n\n" +
                 "Importante: use o app só onde o jogo permitir automação. Se a captura vier preta, o jogo bloqueia capturas de tela e este método não funciona nele.", 13f, Pal.SUB), 8)
@@ -373,7 +378,7 @@ class MainActivity : AppCompatActivity() {
     private fun pageActions() {
         tip("Poções e skills",
             "• Botão: onde fica o ícone da poção/skill na tela do jogo. O app vai tocar ali.\n\n" +
-                "• Poção (vida/mana) com barra: toque num ponto da barra que representa quando você quer beber (ex.: no meio = 50%). Configure com a barra CHEIA. Quando esse pedaço esvaziar, o app aperta a poção.\n\n" +
+                "• Poção (vida/mana) com barra: arraste uma linha do começo ao fim da barra, com a barra CHEIA. O app mede quanto ainda está cheio e aperta a poção quando ficar abaixo da porcentagem que você escolher em Editar (padrão 50%).\n\n" +
                 "• Poção sem barra: aperta de tempos em tempos (recarga).\n\n" +
                 "• Skill: o app aperta a cada \"recarga\" segundos enquanto estiver vendo um monstro.")
         for (a in Store.cfg.actions) add(actionCard(a), 12)
@@ -415,7 +420,7 @@ class MainActivity : AppCompatActivity() {
         c.put(text(a.type.label, 12f, Pal.ACC), 2)
         c.put(text("Botão: " + if (a.btn != null) "definido" else "NÃO definido", 13f, if (a.btn != null) Pal.OK else Pal.WARN), 8)
         if (a.type != ActionType.SKILL) {
-            c.put(text("Barra: " + if (a.bar != null) "definida (bebe quando esvaziar nesse ponto)" else "não definida (usa só a recarga)", 13f, Pal.SUB), 2)
+            c.put(text("Barra: " + (if (a.bar2 != null) "definida (bebe abaixo de ${a.pct}%)" else if (a.bar != null) "definida (modo ponto)" else "não definida (usa só a recarga)"), 13f, Pal.SUB), 2)
         }
         c.put(text("Recarga: ${a.cooldownSec} s", 13f, Pal.SUB), 2)
         val row = LinearLayout(this)
@@ -448,8 +453,9 @@ class MainActivity : AppCompatActivity() {
     private fun setActionBar(a: BotAction) {
         val s = needService() ?: return
         s.startCapture("Deixe a barra de ${if (a.type == ActionType.HP) "vida" else "mana"} CHEIA na tela do jogo. Depois toque em \"Capturar agora\".",
-            "Toque num ponto da barra que representa o limite para beber (ex.: no meio = 50%) e depois em Confirmar.", false) { r ->
+            "Arraste uma linha do começo ao fim da barra (por dentro dela) e depois toque em Confirmar.", false, true) { r ->
             a.bar = fromCap(r)
+            a.bar2 = Pt(r.x2 / r.full.width.toFloat(), r.y2 / r.full.height.toFloat())
             a.barColor = Matcher.avg(r.full, r.x, r.y)
             Store.save()
         }
@@ -471,10 +477,20 @@ class MainActivity : AppCompatActivity() {
         l.setPadding(0, dp(10), 0, 0)
         lay.addView(l)
         lay.addView(cd)
+        val pc = EditText(this)
+        pc.setText(a.pct.toString())
+        pc.inputType = InputType.TYPE_CLASS_NUMBER
+        if (a.type != ActionType.SKILL) {
+            val l2 = text("Beber quando a barra ficar abaixo de (%)", 12f, Pal.SUB)
+            l2.setPadding(0, dp(10), 0, 0)
+            lay.addView(l2)
+            lay.addView(pc)
+        }
         val b = AlertDialog.Builder(this).setTitle("Editar").setView(lay)
             .setPositiveButton("Salvar") { _, _ ->
                 a.name = n.text.toString().ifBlank { a.name }
                 a.cooldownSec = cd.text.toString().replace(',', '.').toFloatOrNull()?.coerceIn(0.5f, 600f) ?: a.cooldownSec
+                a.pct = pc.text.toString().toIntOrNull()?.coerceIn(5, 95) ?: a.pct
                 Store.save()
                 render(false)
             }
@@ -487,8 +503,13 @@ class MainActivity : AppCompatActivity() {
     private fun pageMap() {
         val cfg = Store.cfg
         tip("Trocar de lugar",
-            "Quando o app não vê nenhum monstro por alguns segundos, ele toca no botão do mapa, toca num dos destinos que você marcou, fecha o mapa (se você definiu o botão de fechar) e caminha. Se achar um monstro no caminho, para e ataca.\n\n" +
+            "Quando o app não vê nenhum monstro por alguns segundos, ele passeia (toca em pontos do chão ao redor do personagem) ou, se você ligar a opção do mapa, toca no botão do mapa, toca num dos destinos que você marcou, fecha o mapa (se você definiu o botão de fechar) e caminha. Se achar um monstro no caminho, para e ataca.\n\n" +
                 "Para marcar um destino: abra o MAPA no jogo ANTES de tocar em \"Capturar agora\", e toque no lugar desejado.")
+        toggle("Usar o mapa para trocar de lugar", "Desligado (padrão): o app passeia tocando no chão perto do personagem. No Rucoy Online se anda tocando na tela. Ligado: usa o botão do mapa e os destinos abaixo.", cfg.useMap) { cfg.useMap = it }
+        slider("Alcance do passeio", "Até que distância do personagem o app toca para andar (porcentagem da largura da tela).",
+            10, 45, cfg.wanderPct, { "$it%" }) { cfg.wanderPct = it }
+        slider("Tempo andando por toque", "Quanto o app espera andando depois de cada toque de passeio.",
+            10, 80, (cfg.wanderSec * 10).toInt(), { "${it / 10.0} s" }) { cfg.wanderSec = it / 10f }
         val c1 = card()
         c1.put(text("Botão que abre o mapa", 15f, Pal.TXT, true), 0)
         c1.put(text(if (cfg.mapBtn != null) "definido" else "NÃO definido", 13f, if (cfg.mapBtn != null) Pal.OK else Pal.WARN), 2)
@@ -557,11 +578,39 @@ class MainActivity : AppCompatActivity() {
         toggle("Destinos em ordem aleatória", "Desligado: vai passando pelos destinos na ordem da lista.", cfg.randomDest) { cfg.randomDest = it }
     }
 
+    private fun applyRucoy() {
+        val c = Store.cfg
+        c.scanMs = 700
+        c.reclickSec = 3f
+        c.offsetPx = 45
+        c.monScore = 70
+        c.itemScore = 72
+        c.lootFirst = true
+        c.nearest = true
+        c.giveUpSec = 40
+        c.useMap = false
+        c.wanderPct = 30
+        c.wanderSec = 2.5f
+        c.noMonsterSec = 3f
+        c.mTop = 0
+        c.mBottom = 0
+        c.mLeft = 0
+        c.mRight = 0
+        Store.save()
+    }
+
     // ---------- AJUSTES ----------
     private fun pageSettings() {
         val cfg = Store.cfg
         tip("Ajustes finos",
             "Cada item abaixo explica o que faz. Mexa com calma: o padrão já funciona na maioria dos jogos.")
+        val pr = card()
+        pr.put(text("Rucoy Online", 16f, Pal.TXT, true), 0)
+        pr.put(text("Aplica valores iniciais que costumam servir no Rucoy (nomes pequenos, personagem no centro, andar tocando no chão). Depois ajuste testando.", 12f, Pal.SUB), 4)
+        pr.put(button("Aplicar valores do Rucoy", Pal.OK) {
+            confirm("Trocar os ajustes de busca e tempos pelos valores do Rucoy?") { applyRucoy(); render(false) }
+        }, 10)
+        add(pr)
         slider("Velocidade da busca", "De quanto em quanto tempo o app olha a tela. Menor = reage mais rápido, mas gasta mais bateria.",
             4, 20, cfg.scanMs / 100, { "${it / 10.0} s" }) { cfg.scanMs = it * 100 }
         slider("Tocar de novo no monstro", "Intervalo entre um toque e outro no monstro enquanto ele estiver na tela.",
@@ -572,6 +621,9 @@ class MainActivity : AppCompatActivity() {
             40, 95, cfg.monScore, { "$it%" }) { cfg.monScore = it }
         slider("Sensibilidade para itens", "O mesmo, para os itens do chão.",
             40, 95, cfg.itemScore, { "$it%" }) { cfg.itemScore = it }
+        toggle("Atacar o monstro mais perto", "Ligado: entre vários monstros, vai no mais perto do centro da tela (onde fica o personagem). Desligado: vai no que mais se parece com a foto.", cfg.nearest) { cfg.nearest = it }
+        slider("Desistir do monstro após", "Se ficar tentando o mesmo lugar por tanto tempo (monstro inalcançável), ignora por um tempo.",
+            10, 120, cfg.giveUpSec, { "$it s" }) { cfg.giveUpSec = it }
         toggle("Pegar itens antes de atacar", "Ligado: se houver item no chão, pega primeiro. Desligado: só pega quando não houver monstro.", cfg.lootFirst) { cfg.lootFirst = it }
         add(text("Área de busca", 18f, Pal.TXT, true), 18)
         add(text("Ignore partes da tela onde aparece o nome do seu personagem, chat ou barras, para o app não confundir.", 12f, Pal.SUB), 4)

@@ -20,6 +20,8 @@ class BotAction(var id: String, var name: String, var type: ActionType) {
     var btn: Pt? = null
     var bar: Pt? = null
     var barColor = 0
+    var bar2: Pt? = null
+    var pct = 50
 }
 
 class Target(var id: String, var name: String, var isItem: Boolean, var file: String) {
@@ -46,6 +48,11 @@ class Cfg {
     var mBottom = 0
     var mLeft = 0
     var mRight = 0
+    var useMap = false
+    var wanderPct = 30
+    var wanderSec = 2.5f
+    var nearest = true
+    var giveUpSec = 40
 
     private fun ptJs(p: Pt?): Any =
         if (p == null) JSONObject.NULL else JSONObject().put("x", p.fx.toDouble()).put("y", p.fy.toDouble())
@@ -57,7 +64,7 @@ class Cfg {
             aa.put(
                 JSONObject().put("id", a.id).put("name", a.name).put("type", a.type.name)
                     .put("en", a.enabled).put("cd", a.cooldownSec.toDouble())
-                    .put("btn", ptJs(a.btn)).put("bar", ptJs(a.bar)).put("col", a.barColor)
+                    .put("btn", ptJs(a.btn)).put("bar", ptJs(a.bar)).put("bar2", ptJs(a.bar2)).put("pct", a.pct).put("col", a.barColor)
             )
         }
         o.put("actions", aa)
@@ -88,6 +95,11 @@ class Cfg {
         o.put("mBottom", mBottom)
         o.put("mLeft", mLeft)
         o.put("mRight", mRight)
+        o.put("useMap", useMap)
+        o.put("wanderPct", wanderPct)
+        o.put("wanderSec", wanderSec.toDouble())
+        o.put("nearest", nearest)
+        o.put("giveUpSec", giveUpSec)
         return o
     }
 
@@ -106,6 +118,8 @@ class Cfg {
                 a.cooldownSec = j.optDouble("cd", 3.0).toFloat()
                 a.btn = rd(j.optJSONObject("btn"))
                 a.bar = rd(j.optJSONObject("bar"))
+                a.bar2 = rd(j.optJSONObject("bar2"))
+                a.pct = j.optInt("pct", 50)
                 a.barColor = j.optInt("col", 0)
                 c.actions.add(a)
             }
@@ -134,6 +148,11 @@ class Cfg {
             c.mBottom = o.optInt("mBottom", 0)
             c.mLeft = o.optInt("mLeft", 0)
             c.mRight = o.optInt("mRight", 0)
+            c.useMap = o.optBoolean("useMap", false)
+            c.wanderPct = o.optInt("wanderPct", 30)
+            c.wanderSec = o.optDouble("wanderSec", 2.5).toFloat()
+            c.nearest = o.optBoolean("nearest", true)
+            c.giveUpSec = o.optInt("giveUpSec", 40)
             return c
         }
     }

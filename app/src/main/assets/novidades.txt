@@ -1,3 +1,11 @@
+#id 2026-10-29-b
+#titulo Melhorias para o Rucoy Online
+- Passeia sozinho tocando no chão quando não há monstro (o mapa virou opcional)
+- Ataca o monstro mais perto do personagem e desiste de monstros que não consegue alcançar
+- Barra de vida/mana medida em porcentagem (arraste uma linha na barra)
+- Botão com valores iniciais para o Rucoy em Ajustes
+- Dicas do Rucoy na tela Início
+
 #id 2026-10-29-a
 #titulo Primeira versão
 - Bot que procura o nome do monstro na tela e ataca
