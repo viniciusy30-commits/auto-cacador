@@ -1,0 +1,601 @@
+package com.vinicius.autocacador
+
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.os.Build
+import android.os.Bundle
+import android.provider.Settings
+import android.text.InputType
+import android.view.Gravity
+import android.view.View
+import android.widget.EditText
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.SeekBar
+import android.widget.TextView
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SwitchCompat
+import java.io.File
+import java.io.FileOutputStream
+
+class MainActivity : AppCompatActivity() {
+    private lateinit var scroll: ScrollView
+    private lateinit var content: LinearLayout
+    private var tab = 0
+    private val tabIcons = ArrayList<IconView>()
+    private val tabLabels = ArrayList<TextView>()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        Store.init(this)
+        val root = LinearLayout(this)
+        root.orientation = VERT
+        root.setBackgroundColor(Pal.BG)
+        val head = LinearLayout(this)
+        head.orientation = HORZ
+        head.gravity = Gravity.CENTER_VERTICAL
+        head.setPadding(dp(20), dp(18), dp(20), dp(6))
+        head.addView(IconView(this, IconView.TARGET, Pal.ACC), LinearLayout.LayoutParams(dp(30), dp(30)))
+        val ht = text("Auto Caçador", 20f, Pal.TXT, true)
+        ht.setPadding(dp(10), 0, 0, 0)
+        head.addView(ht)
+        root.addView(head)
+        scroll = ScrollView(this)
+        scroll.overScrollMode = View.OVER_SCROLL_NEVER
+        content = LinearLayout(this)
+        content.orientation = VERT
+        content.setPadding(dp(16), dp(8), dp(16), dp(24))
+        scroll.addView(content)
+        root.addView(scroll, LinearLayout.LayoutParams(MP, 0, 1f))
+        val bar = LinearLayout(this)
+        bar.orientation = HORZ
+        bar.setBackgroundColor(Pal.CARD)
+        val names = listOf("Início", "Alvos", "Ações", "Mapa", "Ajustes")
+        val kinds = listOf(IconView.HOME, IconView.TARGET, IconView.FLASK, IconView.MAP, IconView.GEAR)
+        for (i in names.indices) {
+            val col = LinearLayout(this)
+            col.orientation = VERT
+            col.gravity = Gravity.CENTER
+            col.setPadding(0, dp(8), 0, dp(8))
+            val ic = IconView(this, kinds[i], Pal.SUB)
+            val lb = text(names[i], 10f, Pal.SUB)
+            col.addView(ic, LinearLayout.LayoutParams(dp(24), dp(24)))
+            col.addView(lb)
+            col.setOnClickListener { tab = i; render(true) }
+            tabIcons.add(ic)
+            tabLabels.add(lb)
+            bar.addView(col, LinearLayout.LayoutParams(0, WC, 1f))
+        }
+        root.addView(bar)
+        setContentView(root)
+        Novidades.maybeShow(this)
+        Updater.autoCheck(this)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        render(false)
+    }
+
+    private fun render(anim: Boolean) {
+        val y = if (anim) 0 else scroll.scrollY
+        content.removeAllViews()
+        when (tab) {
+            0 -> pageHome()
+            1 -> pageTargets()
+            2 -> pageActions()
+            3 -> pageMap()
+            else -> pageSettings()
+        }
+        if (anim) {
+            content.alpha = 0f
+            content.translationY = dp(14).toFloat()
+            content.animate().alpha(1f).translationY(0f).setDuration(220).start()
+        }
+        scroll.post { scroll.scrollTo(0, y) }
+        for (i in tabIcons.indices) {
+            val c = if (i == tab) Pal.ACC else Pal.SUB
+            tabIcons[i].color = c
+            tabIcons[i].invalidate()
+            tabLabels[i].setTextColor(c)
+        }
+    }
+
+    // ---------- helpers de interface ----------
+    private fun add(v: View, top: Int = 10) {
+        val lp = LinearLayout.LayoutParams(MP, WC)
+        lp.topMargin = dp(top)
+        content.addView(v, lp)
+    }
+
+    private fun card(): LinearLayout {
+        val c = LinearLayout(this)
+        c.orientation = VERT
+        c.setPadding(dp(16), dp(14), dp(16), dp(14))
+        c.background = rounded(Pal.CARD, dp(18).toFloat())
+        return c
+    }
+
+    private fun LinearLayout.put(v: View, top: Int = 6) {
+        val lp = LinearLayout.LayoutParams(MP, WC)
+        lp.topMargin = dp(top)
+        addView(v, lp)
+    }
+
+    private fun tip(title: String, body: String) {
+        val c = LinearLayout(this)
+        c.orientation = VERT
+        c.setPadding(dp(16), dp(12), dp(16), dp(12))
+        c.background = rounded(Pal.CARD2, dp(16).toFloat(), Pal.WARN, dp(1))
+        c.put(text(title, 14f, Pal.WARN, true), 0)
+        c.put(text(body, 13f, Pal.TXT), 4)
+        add(c, 4)
+    }
+
+    private fun LinearLayout.status(label: String, ok: Boolean, detail: String) {
+        val r = LinearLayout(context)
+        r.orientation = HORZ
+        r.gravity = Gravity.CENTER_VERTICAL
+        val dot = View(context)
+        dot.background = rounded(if (ok) Pal.OK else Pal.BAD, dp(6).toFloat())
+        r.addView(dot, LinearLayout.LayoutParams(dp(12), dp(12)))
+        val t = text("$label: $detail", 13f, Pal.TXT)
+        t.setPadding(dp(10), 0, 0, 0)
+        r.addView(t)
+        put(r, 8)
+    }
+
+    private fun info(title: String, msg: String) {
+        AlertDialog.Builder(this).setTitle(title).setMessage(msg).setPositiveButton("Entendi", null).show()
+    }
+
+    private fun confirm(msg: String, yes: () -> Unit) {
+        AlertDialog.Builder(this).setMessage(msg)
+            .setPositiveButton("Sim") { _, _ -> yes() }
+            .setNegativeButton("Não", null).show()
+    }
+
+    private fun needService(): BotService? {
+        val s = BotService.inst
+        if (s == null) {
+            info("Ative o serviço", "Vá na aba Início e ative o serviço de acessibilidade do Auto Caçador. Sem ele o app não consegue ver a tela nem tocar.")
+            return null
+        }
+        if (Build.VERSION.SDK_INT < 30) {
+            info("Android muito antigo", "Para ver a tela do jogo, o app precisa de Android 11 ou mais novo. Neste celular a detecção por imagem não funciona.")
+            return null
+        }
+        if (s.engine.running) {
+            info("Bot rodando", "Pare o bot (painel flutuante ou aba Início) antes de configurar.")
+            return null
+        }
+        return s
+    }
+
+    private fun slider(t: String, d: String, lo: Int, hi: Int, cur: Int, fmt: (Int) -> String, set: (Int) -> Unit) {
+        val c = card()
+        val head = text("$t: ${fmt(cur)}", 15f, Pal.TXT, true)
+        c.put(head, 0)
+        c.put(text(d, 12f, Pal.SUB), 2)
+        val sb = SeekBar(this)
+        sb.max = hi - lo
+        sb.progress = (cur - lo).coerceIn(0, hi - lo)
+        sb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) { head.text = "$t: ${fmt(p + lo)}" }
+            override fun onStartTrackingTouch(s: SeekBar?) {}
+            override fun onStopTrackingTouch(s: SeekBar?) { set((s?.progress ?: 0) + lo); Store.save() }
+        })
+        c.put(sb, 8)
+        add(c)
+    }
+
+    private fun toggle(t: String, d: String, cur: Boolean, set: (Boolean) -> Unit) {
+        val c = card()
+        val r = LinearLayout(this)
+        r.orientation = HORZ
+        r.gravity = Gravity.CENTER_VERTICAL
+        r.addView(text(t, 15f, Pal.TXT, true), LinearLayout.LayoutParams(0, WC, 1f))
+        val sw = SwitchCompat(this)
+        sw.isChecked = cur
+        sw.setOnCheckedChangeListener { _, v -> set(v); Store.save() }
+        r.addView(sw)
+        c.put(r, 0)
+        c.put(text(d, 12f, Pal.SUB), 4)
+        add(c)
+    }
+
+    private fun fromCap(r: CapResult) = Pt(r.x / r.full.width.toFloat(), r.y / r.full.height.toFloat())
+
+    // ---------- INÍCIO ----------
+    private fun pageHome() {
+        val svc = BotService.inst
+        val cfg = Store.cfg
+        val hero = card()
+        hero.put(text("Bem-vindo!", 22f, Pal.TXT, true), 0)
+        hero.put(text("Este app olha a tela do seu jogo, acha o monstro pelo nome, ataca, usa poções e skills, troca de lugar pelo mapa quando não tem monstro e pega os itens do chão. Tudo é configurado aqui, passo a passo.", 14f, Pal.SUB), 6)
+        add(hero, 4)
+
+        val nm = cfg.targets.count { !it.isItem && it.enabled }
+        val ni = cfg.targets.count { it.isItem && it.enabled }
+        val mapOk = cfg.mapBtn != null && cfg.dests.isNotEmpty()
+        val st = card()
+        st.put(text("Situação", 16f, Pal.TXT, true), 0)
+        st.status("Serviço de acessibilidade", svc != null, if (svc != null) "ligado" else "desligado")
+        st.status("Ver a tela (Android 11+)", Build.VERSION.SDK_INT >= 30, if (Build.VERSION.SDK_INT >= 30) "ok" else "indisponível")
+        st.status("Monstros cadastrados", nm > 0, "$nm")
+        st.status("Itens cadastrados (opcional)", ni > 0, "$ni")
+        st.status("Poções/skills com botão (opcional)", cfg.actions.any { it.btn != null }, "${cfg.actions.count { it.btn != null }}")
+        st.status("Mapa configurado (opcional)", mapOk, if (mapOk) "sim" else "não")
+        add(st)
+
+        if (svc == null) {
+            add(button("Ativar serviço de acessibilidade") {
+                AlertDialog.Builder(this)
+                    .setTitle("Como ativar")
+                    .setMessage("1. Na tela que vai abrir, procure \"Auto Caçador\" (pode estar em Apps instalados / Serviços baixados).\n2. Ligue a chave e aceite o aviso.\n\nSe o Android disser que a configuração está restrita (Android 13+): Configurações > Apps > Auto Caçador > menu (⋮) > \"Permitir configurações restritas\", e tente de novo.")
+                    .setPositiveButton("Abrir configurações") { _, _ -> startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+                    .setNegativeButton("Cancelar", null)
+                    .show()
+            }, 14)
+        } else {
+            add(button("Mostrar painel flutuante", Pal.CARD2) { svc.showPanel() }, 14)
+            if (svc.engine.running) {
+                add(button("Parar bot", Pal.BAD) { svc.engine.stop(); render(false) }, 10)
+            } else {
+                add(button("Iniciar bot", Pal.OK) {
+                    if (nm == 0) {
+                        info("Falta o monstro", "Na aba Alvos, capture pelo menos o nome de 1 monstro.")
+                    } else if (Build.VERSION.SDK_INT < 30) {
+                        info("Android muito antigo", "Precisa de Android 11 ou mais novo.")
+                    } else {
+                        svc.showPanel()
+                        svc.engine.start()
+                        Toast.makeText(this, "Bot iniciado! Abra o jogo. Pare pelo painel flutuante.", Toast.LENGTH_LONG).show()
+                        moveTaskToBack(true)
+                    }
+                }, 10)
+            }
+        }
+
+        val g = card()
+        g.put(text("Passo a passo", 16f, Pal.TXT, true), 0)
+        g.put(text(
+            "1. Ative o serviço de acessibilidade (botão acima).\n\n" +
+                "2. Alvos > \"Capturar nome de monstro\": abra o jogo com o monstro na tela, toque em \"Capturar agora\" e arraste um retângulo bem justo em volta do NOME dele. Capture um nome para cada tipo de monstro.\n\n" +
+                "3. (Opcional) Alvos > \"Capturar item\": faça o mesmo com a imagem do item caído no chão.\n\n" +
+                "4. Ações: adicione poção de vida, de mana e skills. Defina onde fica cada botão.\n\n" +
+                "5. Mapa: defina o botão que abre o mapa e os lugares para onde ir quando não houver monstro.\n\n" +
+                "6. Ajustes: regule a sensibilidade e os tempos. Cada opção tem uma explicação.\n\n" +
+                "7. Abra o jogo e toque em ▶ no painel flutuante. Para parar, toque em ■.\n\n" +
+                "Importante: use o app só onde o jogo permitir automação. Se a captura vier preta, o jogo bloqueia capturas de tela e este método não funciona nele.", 13f, Pal.SUB), 8)
+        add(g)
+    }
+
+    // ---------- ALVOS ----------
+    private fun pageTargets() {
+        tip("Como o app acha as coisas",
+            "O app não lê letras: ele compara uma FOTO. Você recorta o nome do monstro (ou o item) da tela e ele procura essa imagem no jogo.\n\n" +
+                "• Recorte justo, só o texto do nome, sem muito cenário em volta.\n" +
+                "• Se o monstro tem nomes diferentes, capture um de cada.\n" +
+                "• Depois de trocar a resolução ou o tamanho da interface do jogo, capture de novo.")
+        targetSection(false)
+        targetSection(true)
+    }
+
+    private fun targetSection(isItem: Boolean) {
+        val list = Store.cfg.targets.filter { it.isItem == isItem }
+        add(text(if (isItem) "Itens do chão (por foto)" else "Monstros (pelo nome)", 18f, Pal.TXT, true), 18)
+        if (list.isEmpty()) add(text("Nenhum ainda.", 13f, Pal.SUB), 6)
+        for (t in list) add(targetRow(t), 8)
+        add(button(if (isItem) "Capturar item" else "Capturar nome de monstro") { captureTarget(isItem) }, 10)
+    }
+
+    private fun targetRow(t: Target): View {
+        val c = card()
+        val r = LinearLayout(this)
+        r.orientation = HORZ
+        r.gravity = Gravity.CENTER_VERTICAL
+        val img = ImageView(this)
+        img.scaleType = ImageView.ScaleType.FIT_CENTER
+        img.setBackgroundColor(Pal.BG)
+        val bm: Bitmap? = BitmapFactory.decodeFile(File(Store.tplDir(), t.file).path)
+        if (bm != null) img.setImageBitmap(bm)
+        r.addView(img, LinearLayout.LayoutParams(dp(90), dp(44)))
+        val nm = text(t.name, 15f, Pal.TXT, true)
+        nm.setPadding(dp(12), 0, dp(8), 0)
+        nm.setOnClickListener { rename(t) }
+        r.addView(nm, LinearLayout.LayoutParams(0, WC, 1f))
+        val sw = SwitchCompat(this)
+        sw.isChecked = t.enabled
+        sw.setOnCheckedChangeListener { _, v -> t.enabled = v; Store.save() }
+        r.addView(sw)
+        val del = IconView(this, IconView.TRASH, Pal.BAD)
+        del.setOnClickListener {
+            confirm("Apagar \"${t.name}\"?") {
+                File(Store.tplDir(), t.file).delete()
+                Store.cfg.targets.remove(t)
+                Store.save()
+                render(false)
+            }
+        }
+        val lp = LinearLayout.LayoutParams(dp(34), dp(34))
+        lp.leftMargin = dp(8)
+        r.addView(del, lp)
+        c.put(r, 0)
+        c.put(text("Toque no nome para renomear.", 11f, Pal.SUB), 4)
+        return c
+    }
+
+    private fun rename(t: Target) {
+        val e = EditText(this)
+        e.setText(t.name)
+        val lay = LinearLayout(this)
+        lay.setPadding(dp(20), dp(10), dp(20), 0)
+        lay.addView(e, LinearLayout.LayoutParams(MP, WC))
+        AlertDialog.Builder(this).setTitle("Renomear").setView(lay)
+            .setPositiveButton("Salvar") { _, _ ->
+                t.name = e.text.toString().ifBlank { t.name }
+                Store.save()
+                render(false)
+            }
+            .setNegativeButton("Cancelar", null).show()
+    }
+
+    private fun captureTarget(isItem: Boolean) {
+        val s = needService() ?: return
+        val banner = if (isItem) "Abra o jogo e deixe o ITEM visível no chão. Depois toque em \"Capturar agora\"."
+        else "Abra o jogo e deixe o monstro com o NOME visível. Depois toque em \"Capturar agora\"."
+        val pick = if (isItem) "Arraste um retângulo bem justo em volta do ITEM e toque em Confirmar."
+        else "Arraste um retângulo bem justo em volta do NOME do monstro e toque em Confirmar."
+        s.startCapture(banner, pick, true) { r ->
+            val crop = r.crop
+            if (crop != null) {
+                val ok = Matcher.makeTpl(Matcher.toGray(crop, 2), !isItem) != null
+                if (!ok) {
+                    s.toast("Recorte pequeno ou liso demais. Tente de novo, pegando o nome inteiro.")
+                } else {
+                    val id = System.currentTimeMillis().toString()
+                    FileOutputStream(File(Store.tplDir(), "$id.png")).use { crop.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                    val n = Store.cfg.targets.count { it.isItem == isItem } + 1
+                    Store.cfg.targets.add(Target(id, (if (isItem) "Item " else "Monstro ") + n, isItem, "$id.png"))
+                    Store.save()
+                }
+            }
+        }
+        moveTaskToBack(true)
+    }
+
+    // ---------- AÇÕES ----------
+    private fun pageActions() {
+        tip("Poções e skills",
+            "• Botão: onde fica o ícone da poção/skill na tela do jogo. O app vai tocar ali.\n\n" +
+                "• Poção (vida/mana) com barra: toque num ponto da barra que representa quando você quer beber (ex.: no meio = 50%). Configure com a barra CHEIA. Quando esse pedaço esvaziar, o app aperta a poção.\n\n" +
+                "• Poção sem barra: aperta de tempos em tempos (recarga).\n\n" +
+                "• Skill: o app aperta a cada \"recarga\" segundos enquanto estiver vendo um monstro.")
+        for (a in Store.cfg.actions) add(actionCard(a), 12)
+        add(button("Adicionar poção ou skill") { addAction() }, 14)
+    }
+
+    private fun addAction() {
+        val types = ActionType.values()
+        AlertDialog.Builder(this).setTitle("O que adicionar?")
+            .setItems(types.map { it.label }.toTypedArray()) { _, i ->
+                val ty = types[i]
+                val n = Store.cfg.actions.count { it.type == ty } + 1
+                val a = BotAction(System.currentTimeMillis().toString(), if (n > 1) "${ty.label} $n" else ty.label, ty)
+                a.cooldownSec = if (ty == ActionType.SKILL) 3f else 5f
+                Store.cfg.actions.add(a)
+                Store.save()
+                render(false)
+            }.show()
+    }
+
+    private fun actionCard(a: BotAction): View {
+        val c = card()
+        val top = LinearLayout(this)
+        top.orientation = HORZ
+        top.gravity = Gravity.CENTER_VERTICAL
+        top.addView(text(a.name, 16f, Pal.TXT, true), LinearLayout.LayoutParams(0, WC, 1f))
+        val sw = SwitchCompat(this)
+        sw.isChecked = a.enabled
+        sw.setOnCheckedChangeListener { _, v -> a.enabled = v; Store.save() }
+        top.addView(sw)
+        val del = IconView(this, IconView.TRASH, Pal.BAD)
+        del.setOnClickListener {
+            confirm("Apagar \"${a.name}\"?") { Store.cfg.actions.remove(a); Store.save(); render(false) }
+        }
+        val dl = LinearLayout.LayoutParams(dp(34), dp(34))
+        dl.leftMargin = dp(8)
+        top.addView(del, dl)
+        c.put(top, 0)
+        c.put(text(a.type.label, 12f, Pal.ACC), 2)
+        c.put(text("Botão: " + if (a.btn != null) "definido" else "NÃO definido", 13f, if (a.btn != null) Pal.OK else Pal.WARN), 8)
+        if (a.type != ActionType.SKILL) {
+            c.put(text("Barra: " + if (a.bar != null) "definida (bebe quando esvaziar nesse ponto)" else "não definida (usa só a recarga)", 13f, Pal.SUB), 2)
+        }
+        c.put(text("Recarga: ${a.cooldownSec} s", 13f, Pal.SUB), 2)
+        val row = LinearLayout(this)
+        row.orientation = HORZ
+        val l1 = LinearLayout.LayoutParams(0, WC, 1f)
+        l1.rightMargin = dp(4)
+        row.addView(button("Botão", Pal.ACC) { setActionBtn(a) }, l1)
+        if (a.type != ActionType.SKILL) {
+            val l2 = LinearLayout.LayoutParams(0, WC, 1f)
+            l2.leftMargin = dp(4); l2.rightMargin = dp(4)
+            row.addView(button("Barra", Pal.ACC) { setActionBar(a) }, l2)
+        }
+        val l3 = LinearLayout.LayoutParams(0, WC, 1f)
+        l3.leftMargin = dp(4)
+        row.addView(button("Editar", Pal.CARD2) { editAction(a) }, l3)
+        c.put(row, 12)
+        return c
+    }
+
+    private fun setActionBtn(a: BotAction) {
+        val s = needService() ?: return
+        s.startCapture("Abra o jogo na tela onde aparece o botão \"${a.name}\". Depois toque em \"Capturar agora\".",
+            "Toque no botão \"${a.name}\" e depois em Confirmar.", false) { r ->
+            a.btn = fromCap(r)
+            Store.save()
+        }
+        moveTaskToBack(true)
+    }
+
+    private fun setActionBar(a: BotAction) {
+        val s = needService() ?: return
+        s.startCapture("Deixe a barra de ${if (a.type == ActionType.HP) "vida" else "mana"} CHEIA na tela do jogo. Depois toque em \"Capturar agora\".",
+            "Toque num ponto da barra que representa o limite para beber (ex.: no meio = 50%) e depois em Confirmar.", false) { r ->
+            a.bar = fromCap(r)
+            a.barColor = Matcher.avg(r.full, r.x, r.y)
+            Store.save()
+        }
+        moveTaskToBack(true)
+    }
+
+    private fun editAction(a: BotAction) {
+        val lay = LinearLayout(this)
+        lay.orientation = VERT
+        lay.setPadding(dp(20), dp(10), dp(20), 0)
+        val n = EditText(this)
+        n.setText(a.name)
+        val cd = EditText(this)
+        cd.setText(a.cooldownSec.toString())
+        cd.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        lay.addView(text("Nome", 12f, Pal.SUB))
+        lay.addView(n)
+        val l = text("Recarga (segundos entre um uso e outro)", 12f, Pal.SUB)
+        l.setPadding(0, dp(10), 0, 0)
+        lay.addView(l)
+        lay.addView(cd)
+        val b = AlertDialog.Builder(this).setTitle("Editar").setView(lay)
+            .setPositiveButton("Salvar") { _, _ ->
+                a.name = n.text.toString().ifBlank { a.name }
+                a.cooldownSec = cd.text.toString().replace(',', '.').toFloatOrNull()?.coerceIn(0.5f, 600f) ?: a.cooldownSec
+                Store.save()
+                render(false)
+            }
+            .setNegativeButton("Cancelar", null)
+        if (a.bar != null) b.setNeutralButton("Remover barra") { _, _ -> a.bar = null; Store.save(); render(false) }
+        b.show()
+    }
+
+    // ---------- MAPA ----------
+    private fun pageMap() {
+        val cfg = Store.cfg
+        tip("Trocar de lugar",
+            "Quando o app não vê nenhum monstro por alguns segundos, ele toca no botão do mapa, toca num dos destinos que você marcou, fecha o mapa (se você definiu o botão de fechar) e caminha. Se achar um monstro no caminho, para e ataca.\n\n" +
+                "Para marcar um destino: abra o MAPA no jogo ANTES de tocar em \"Capturar agora\", e toque no lugar desejado.")
+        val c1 = card()
+        c1.put(text("Botão que abre o mapa", 15f, Pal.TXT, true), 0)
+        c1.put(text(if (cfg.mapBtn != null) "definido" else "NÃO definido", 13f, if (cfg.mapBtn != null) Pal.OK else Pal.WARN), 2)
+        c1.put(button("Definir botão do mapa") {
+            val s = needService()
+            if (s != null) {
+                s.startCapture("Abra o jogo na tela normal (mapa fechado). Depois toque em \"Capturar agora\".",
+                    "Toque no botão que ABRE o mapa e depois em Confirmar.", false) { r -> cfg.mapBtn = fromCap(r); Store.save() }
+                moveTaskToBack(true)
+            }
+        }, 10)
+        add(c1, 12)
+        val c2 = card()
+        c2.put(text("Botão de fechar o mapa (opcional)", 15f, Pal.TXT, true), 0)
+        c2.put(text("Só precisa se o mapa continua aberto depois de escolher o destino.", 12f, Pal.SUB), 2)
+        c2.put(text(if (cfg.mapClose != null) "definido" else "não definido", 13f, if (cfg.mapClose != null) Pal.OK else Pal.SUB), 4)
+        val r2 = LinearLayout(this)
+        r2.orientation = HORZ
+        val q1 = LinearLayout.LayoutParams(0, WC, 1f)
+        q1.rightMargin = dp(4)
+        r2.addView(button("Definir") {
+            val s = needService()
+            if (s != null) {
+                s.startCapture("Abra o MAPA no jogo. Depois toque em \"Capturar agora\".",
+                    "Toque no botão de FECHAR o mapa e depois em Confirmar.", false) { r -> cfg.mapClose = fromCap(r); Store.save() }
+                moveTaskToBack(true)
+            }
+        }, q1)
+        if (cfg.mapClose != null) {
+            val q2 = LinearLayout.LayoutParams(0, WC, 1f)
+            q2.leftMargin = dp(4)
+            r2.addView(button("Remover", Pal.CARD2) { cfg.mapClose = null; Store.save(); render(false) }, q2)
+        }
+        c2.put(r2, 10)
+        add(c2)
+
+        add(text("Destinos", 18f, Pal.TXT, true), 18)
+        if (cfg.dests.isEmpty()) add(text("Nenhum destino ainda.", 13f, Pal.SUB), 6)
+        for (i in cfg.dests.indices) {
+            val c = card()
+            val r = LinearLayout(this)
+            r.orientation = HORZ
+            r.gravity = Gravity.CENTER_VERTICAL
+            r.addView(text("Destino ${i + 1}", 15f, Pal.TXT, true), LinearLayout.LayoutParams(0, WC, 1f))
+            val del = IconView(this, IconView.TRASH, Pal.BAD)
+            del.setOnClickListener { cfg.dests.removeAt(i); Store.save(); render(false) }
+            r.addView(del, LinearLayout.LayoutParams(dp(34), dp(34)))
+            c.put(r, 0)
+            add(c, 8)
+        }
+        add(button("Adicionar destino") {
+            val s = needService()
+            if (s != null) {
+                s.startCapture("Abra o MAPA no jogo. Depois toque em \"Capturar agora\".",
+                    "Toque no lugar do mapa para onde ir e depois em Confirmar.", false) { r -> cfg.dests.add(fromCap(r)); Store.save() }
+                moveTaskToBack(true)
+            }
+        }, 10)
+
+        slider("Tempo de caminhada", "Quanto tempo o app espera andando até o destino (se achar monstro, ele para antes).",
+            2, 60, cfg.travelSec.toInt(), { "$it s" }) { cfg.travelSec = it.toFloat() }
+        slider("Espera ao abrir o mapa", "Tempo para o mapa abrir antes de tocar no destino.",
+            3, 40, (cfg.mapOpenSec * 10).toInt(), { "${it / 10.0} s" }) { cfg.mapOpenSec = it / 10f }
+        slider("Sem monstro por quanto tempo?", "Quantos segundos sem ver monstro até abrir o mapa.",
+            1, 30, cfg.noMonsterSec.toInt(), { "$it s" }) { cfg.noMonsterSec = it.toFloat() }
+        toggle("Destinos em ordem aleatória", "Desligado: vai passando pelos destinos na ordem da lista.", cfg.randomDest) { cfg.randomDest = it }
+    }
+
+    // ---------- AJUSTES ----------
+    private fun pageSettings() {
+        val cfg = Store.cfg
+        tip("Ajustes finos",
+            "Cada item abaixo explica o que faz. Mexa com calma: o padrão já funciona na maioria dos jogos.")
+        slider("Velocidade da busca", "De quanto em quanto tempo o app olha a tela. Menor = reage mais rápido, mas gasta mais bateria.",
+            4, 20, cfg.scanMs / 100, { "${it / 10.0} s" }) { cfg.scanMs = it * 100 }
+        slider("Tocar de novo no monstro", "Intervalo entre um toque e outro no monstro enquanto ele estiver na tela.",
+            5, 100, (cfg.reclickSec * 10).toInt(), { "${it / 10.0} s" }) { cfg.reclickSec = it / 10f }
+        slider("Toque abaixo do nome", "O nome fica acima do monstro. Este valor desce o toque para acertar o corpo (em pixels).",
+            0, 200, cfg.offsetPx, { "$it px" }) { cfg.offsetPx = it }
+        slider("Sensibilidade para monstros", "Quanto a imagem precisa ser parecida. Se não acha o monstro, diminua. Se toca onde não deve, aumente.",
+            40, 95, cfg.monScore, { "$it%" }) { cfg.monScore = it }
+        slider("Sensibilidade para itens", "O mesmo, para os itens do chão.",
+            40, 95, cfg.itemScore, { "$it%" }) { cfg.itemScore = it }
+        toggle("Pegar itens antes de atacar", "Ligado: se houver item no chão, pega primeiro. Desligado: só pega quando não houver monstro.", cfg.lootFirst) { cfg.lootFirst = it }
+        add(text("Área de busca", 18f, Pal.TXT, true), 18)
+        add(text("Ignore partes da tela onde aparece o nome do seu personagem, chat ou barras, para o app não confundir.", 12f, Pal.SUB), 4)
+        slider("Ignorar topo", "Porcentagem da tela, de cima para baixo.", 0, 40, cfg.mTop, { "$it%" }) { cfg.mTop = it }
+        slider("Ignorar base", "Porcentagem da tela, de baixo para cima.", 0, 40, cfg.mBottom, { "$it%" }) { cfg.mBottom = it }
+        slider("Ignorar esquerda", "Porcentagem da tela, da esquerda para a direita.", 0, 40, cfg.mLeft, { "$it%" }) { cfg.mLeft = it }
+        slider("Ignorar direita", "Porcentagem da tela, da direita para a esquerda.", 0, 40, cfg.mRight, { "$it%" }) { cfg.mRight = it }
+
+        add(text("Aplicativo", 18f, Pal.TXT, true), 18)
+        val c = card()
+        c.put(text("Versão ${Updater.installedName(this)}", 14f, Pal.TXT, true), 0)
+        c.put(button("Verificar atualização") { Updater.manualCheck(this) }, 10)
+        c.put(button("Ver o que mudou", Pal.CARD2) { Novidades.showLatest(this) }, 8)
+        add(c)
+
+        val h = card()
+        h.put(text("Ajuda", 16f, Pal.TXT, true), 0)
+        h.put(text(
+            "• Tela preta ao capturar: o jogo bloqueia capturas. Não há como contornar.\n" +
+                "• Não acha o monstro: capture o nome de novo (recorte justo) ou diminua a sensibilidade.\n" +
+                "• Toca no lugar errado: confira o \"Toque abaixo do nome\" e a área de busca.\n" +
+                "• Girou a tela do celular? Os pontos continuam valendo se o jogo mantiver a mesma orientação.\n" +
+                "• Muitas imagens deixam a busca mais lenta: use só as necessárias.\n" +
+                "• O serviço desliga sozinho? Alguns celulares matam apps em segundo plano: tire o Auto Caçador da economia de bateria.", 12f, Pal.SUB), 8)
+        add(h)
+    }
+}

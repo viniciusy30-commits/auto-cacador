@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Auto Caçador</string>
+    <string name="service_label">Auto Caçador</string>
+    <string name="service_desc">Permite que o Auto Caçador veja a tela do jogo e toque nela por você (atacar monstros, usar poções e skills, abrir o mapa e pegar itens). Ele só faz isso quando você aperta Iniciar no painel flutuante.</string>
+</resources>

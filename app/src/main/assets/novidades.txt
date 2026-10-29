@@ -1,0 +1,7 @@
+#id 2026-10-29-a
+#titulo Primeira versão
+- Bot que procura o nome do monstro na tela e ataca
+- Poções de vida/mana e skills configuráveis
+- Abre o mapa e troca de lugar quando não acha monstro
+- Pega itens do chão por foto
+- Painel flutuante com Iniciar/Parar
