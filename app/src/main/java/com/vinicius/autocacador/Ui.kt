@@ -81,6 +81,7 @@ class IconView(ctx: Context, var kind: Int, var color: Int = Color.WHITE) : View
         const val STOP = 6
         const val CLOSE = 7
         const val TRASH = 8
+        const val DROP = 9
     }
 
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -144,6 +145,14 @@ class IconView(ctx: Context, var kind: Int, var color: Int = Color.WHITE) : View
             CLOSE -> {
                 c.drawLine(cx - r * 0.7f, cy - r * 0.7f, cx + r * 0.7f, cy + r * 0.7f, p)
                 c.drawLine(cx + r * 0.7f, cy - r * 0.7f, cx - r * 0.7f, cy + r * 0.7f, p)
+            }
+            DROP -> {
+                path.moveTo(cx, cy - r * 1.1f)
+                path.cubicTo(cx + r * 0.2f, cy - r * 0.5f, cx + r * 0.95f, cy + r * 0.05f, cx + r * 0.65f, cy + r * 0.6f)
+                path.quadTo(cx, cy + r * 1.2f, cx - r * 0.65f, cy + r * 0.6f)
+                path.cubicTo(cx - r * 0.95f, cy + r * 0.05f, cx - r * 0.2f, cy - r * 0.5f, cx, cy - r * 1.1f)
+                path.close()
+                c.drawPath(path, p)
             }
             TRASH -> {
                 c.drawLine(cx - r, cy - r * 0.6f, cx + r, cy - r * 0.6f, p)

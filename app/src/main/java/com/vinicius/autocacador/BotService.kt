@@ -14,6 +14,9 @@ import android.graphics.Rect
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.util.DisplayMetrics
 import android.view.Display
 import android.view.Gravity
@@ -115,6 +118,9 @@ class BotService : AccessibilityService() {
     private var playIcon: IconView? = null
     private var banner: View? = null
     private var pickLayer: View? = null
+    val rec = RouteRecorder(this)
+    private var recBanner: View? = null
+    private var recTv: TextView? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -129,6 +135,7 @@ class BotService : AccessibilityService() {
 
     override fun onUnbind(intent: Intent?): Boolean {
         engine.stop()
+        rec.finish(false)
         ui.post { removeAll() }
         inst = null
         return super.onUnbind(intent)
@@ -141,6 +148,27 @@ class BotService : AccessibilityService() {
 
     fun setStatus(t: String) {
         ui.post { statusTv?.text = t }
+    }
+
+    /** Aviso forte: mensagem na tela + celular vibrando (boss, vida crítica, tela de morte). */
+    fun alert(msg: String) {
+        toast(msg)
+        setStatus(msg)
+        try {
+            val pattern = longArrayOf(0, 500, 250, 500, 250, 900)
+            if (Build.VERSION.SDK_INT >= 31) {
+                val vm = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+                vm.defaultVibrator.vibrate(VibrationEffect.createWaveform(pattern, -1))
+            } else {
+                @Suppress("DEPRECATION")
+                val v = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+                if (Build.VERSION.SDK_INT >= 26) {
+                    v.vibrate(VibrationEffect.createWaveform(pattern, -1))
+                } else {
+                    v.vibrate(pattern, -1)
+                }
+            }
+        } catch (e: Throwable) { }
     }
 
     fun runState(on: Boolean) {
@@ -162,11 +190,68 @@ class BotService : AccessibilityService() {
 
     private fun removeAll() {
         removeView(panel); panel = null
-        closeBanner(); closePick()
+        closeBanner(); closePick(); closeRec()
     }
 
     private fun closeBanner() { removeView(banner); banner = null }
     private fun closePick() { removeView(pickLayer); pickLayer = null }
+    private fun closeRec() { removeView(recBanner); recBanner = null; recTv = null }
+
+    fun recStatus(t: String) {
+        ui.post { recTv?.text = t }
+    }
+
+    /** Abre o painel de gravação de rota. O jogador anda no jogo e o app mede o caminho. */
+    fun startRecording() {
+        ui.post {
+            val w = wm ?: return@post
+            if (engine.running) { toast("Pare o bot antes de gravar a rota."); return@post }
+            if (rec.active) return@post
+            if (Build.VERSION.SDK_INT < 30) { toast("Gravar rota precisa de Android 11 ou mais novo."); return@post }
+            closeBanner(); closePick(); closeRec()
+            val box = LinearLayout(this)
+            box.orientation = LinearLayout.VERTICAL
+            box.setPadding(dp(14), dp(12), dp(14), dp(12))
+            box.background = rounded(Color.parseColor("#F21A1F36"), dp(18).toFloat(), Pal.BAD, dp(1))
+            val t = text("Gravando… ande pelo jogo.", 13f)
+            t.maxWidth = dp(300)
+            box.addView(t)
+            recTv = t
+            val b0 = LinearLayout.LayoutParams(MP, WC)
+            b0.topMargin = dp(10)
+            box.addView(button("📍 Marcar ponto de caça", Pal.ACC) {
+                rec.mark()
+                toast("Ponto de caça marcado aqui.")
+            }, b0)
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            val b1 = LinearLayout.LayoutParams(0, WC, 1f)
+            b1.topMargin = dp(8); b1.rightMargin = dp(6)
+            val b2 = LinearLayout.LayoutParams(0, WC, 1f)
+            b2.topMargin = dp(8); b2.leftMargin = dp(6)
+            row.addView(button("Salvar", Pal.OK) { finishRec(true) }, b1)
+            row.addView(button("Cancelar", Pal.BAD) { finishRec(false) }, b2)
+            box.addView(row, LinearLayout.LayoutParams(MP, WC))
+            val lp = overlayLp(WC, WC, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+            lp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            lp.y = dp(36)
+            try { w.addView(box, lp) } catch (e: Exception) { return@post }
+            recBanner = box
+            rec.start()
+        }
+    }
+
+    fun finishRec(save: Boolean) {
+        ui.post {
+            if (save && rec.count() < 2) {
+                toast("Rota muito curta: ande mais um pouco antes de salvar.")
+                return@post
+            }
+            rec.finish(save)
+            closeRec()
+            if (save) openApp()
+        }
+    }
 
     fun openApp() {
         val i = Intent(this, MainActivity::class.java)
@@ -223,7 +308,11 @@ class BotService : AccessibilityService() {
         if (engine.running) {
             engine.stop()
         } else {
-            if (Store.cfg.targets.none { !it.isItem && it.enabled }) {
+            if (rec.active) {
+                toast("Termine a gravação da rota primeiro (Salvar ou Cancelar).")
+                return
+            }
+            if (Store.cfg.targets.none { !it.isItem && !it.alert && it.enabled && it.ready() }) {
                 toast("Capture pelo menos 1 monstro na aba Alvos do app.")
                 return
             }

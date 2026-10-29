@@ -22,10 +22,19 @@ class BotAction(var id: String, var name: String, var type: ActionType) {
     var barColor = 0
     var bar2: Pt? = null
     var pct = 50
+    /** Abaixo disso (%) a poção ignora a recarga normal e bebe mais rápido. 0 = desligado. */
+    var urgentPct = 0
 }
 
 class Target(var id: String, var name: String, var isItem: Boolean, var file: String) {
     var enabled = true
+    /** Alvo de alerta: se aparecer na tela, o bot para e o celular vibra (boss, tela de morte...). */
+    var alert = false
+    /** Identifica o espaço do assistente de hunt (ex.: "vamp", "item_pendant"). */
+    var slot = ""
+
+    /** True quando já existe uma foto capturada para este alvo. */
+    fun ready(): Boolean = file.isNotBlank() && File(Store.tplDir(), file).isFile
 }
 
 class Cfg {
@@ -53,6 +62,18 @@ class Cfg {
     var wanderSec = 2.5f
     var nearest = true
     var giveUpSec = 40
+    var profile = ""
+    var chaseSec = 3f
+    var lootSweepSec = 0f
+    var lootNearPct = 0
+    var lootTries = 3
+    var explore = false
+    var panicPct = 0
+    var panicSec = 4
+    val route = ArrayList<Waypoint>()
+    var routeOn = false
+    var routeHoldSec = 6
+    var routePing = true
 
     private fun ptJs(p: Pt?): Any =
         if (p == null) JSONObject.NULL else JSONObject().put("x", p.fx.toDouble()).put("y", p.fy.toDouble())
@@ -64,7 +85,7 @@ class Cfg {
             aa.put(
                 JSONObject().put("id", a.id).put("name", a.name).put("type", a.type.name)
                     .put("en", a.enabled).put("cd", a.cooldownSec.toDouble())
-                    .put("btn", ptJs(a.btn)).put("bar", ptJs(a.bar)).put("bar2", ptJs(a.bar2)).put("pct", a.pct).put("col", a.barColor)
+                    .put("btn", ptJs(a.btn)).put("bar", ptJs(a.bar)).put("bar2", ptJs(a.bar2)).put("pct", a.pct).put("col", a.barColor).put("urg", a.urgentPct)
             )
         }
         o.put("actions", aa)
@@ -72,7 +93,7 @@ class Cfg {
         for (t in targets) {
             tt.put(
                 JSONObject().put("id", t.id).put("name", t.name).put("item", t.isItem)
-                    .put("file", t.file).put("en", t.enabled)
+                    .put("file", t.file).put("en", t.enabled).put("alert", t.alert).put("slot", t.slot)
             )
         }
         o.put("targets", tt)
@@ -100,6 +121,20 @@ class Cfg {
         o.put("wanderSec", wanderSec.toDouble())
         o.put("nearest", nearest)
         o.put("giveUpSec", giveUpSec)
+        o.put("profile", profile)
+        o.put("chaseSec", chaseSec.toDouble())
+        o.put("lootSweepSec", lootSweepSec.toDouble())
+        o.put("lootNearPct", lootNearPct)
+        o.put("lootTries", lootTries)
+        o.put("explore", explore)
+        o.put("panicPct", panicPct)
+        o.put("panicSec", panicSec)
+        val rr = JSONArray()
+        for (w in route) rr.put(JSONObject().put("x", w.x.toDouble()).put("y", w.y.toDouble()).put("h", w.hold))
+        o.put("route", rr)
+        o.put("routeOn", routeOn)
+        o.put("routeHoldSec", routeHoldSec)
+        o.put("routePing", routePing)
         return o
     }
 
@@ -121,6 +156,7 @@ class Cfg {
                 a.bar2 = rd(j.optJSONObject("bar2"))
                 a.pct = j.optInt("pct", 50)
                 a.barColor = j.optInt("col", 0)
+                a.urgentPct = j.optInt("urg", 0)
                 c.actions.add(a)
             }
             val tt = o.optJSONArray("targets") ?: JSONArray()
@@ -128,6 +164,8 @@ class Cfg {
                 val j = tt.getJSONObject(i)
                 val t = Target(j.optString("id"), j.optString("name"), j.optBoolean("item"), j.optString("file"))
                 t.enabled = j.optBoolean("en", true)
+                t.alert = j.optBoolean("alert", false)
+                t.slot = j.optString("slot", "")
                 c.targets.add(t)
             }
             val dd = o.optJSONArray("dests") ?: JSONArray()
@@ -153,6 +191,22 @@ class Cfg {
             c.wanderSec = o.optDouble("wanderSec", 2.5).toFloat()
             c.nearest = o.optBoolean("nearest", true)
             c.giveUpSec = o.optInt("giveUpSec", 40)
+            c.profile = o.optString("profile", "")
+            c.chaseSec = o.optDouble("chaseSec", 3.0).toFloat()
+            c.lootSweepSec = o.optDouble("lootSweepSec", 0.0).toFloat()
+            c.lootNearPct = o.optInt("lootNearPct", 0)
+            c.lootTries = o.optInt("lootTries", 3)
+            c.explore = o.optBoolean("explore", false)
+            c.panicPct = o.optInt("panicPct", 0)
+            c.panicSec = o.optInt("panicSec", 4)
+            val rr = o.optJSONArray("route") ?: JSONArray()
+            for (i in 0 until rr.length()) {
+                val j = rr.getJSONObject(i)
+                c.route.add(Waypoint(j.optDouble("x", 0.0).toFloat(), j.optDouble("y", 0.0).toFloat(), j.optBoolean("h", false)))
+            }
+            c.routeOn = o.optBoolean("routeOn", false)
+            c.routeHoldSec = o.optInt("routeHoldSec", 6)
+            c.routePing = o.optBoolean("routePing", true)
             return c
         }
     }

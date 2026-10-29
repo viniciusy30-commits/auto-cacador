@@ -1,3 +1,15 @@
+#id 2026-10-29-c
+#titulo Hunt de Vampire
+- Nova aba Hunt: assistente passo a passo para o Vampire Lair (Vampire Lv 100 e Red Vampire Lv 110)
+- Persegue o vampire que foge com a vida vermelha (reclica rápido enquanto ele se mexe)
+- Loot em duas fases: luta primeiro, pega o que cair perto e varre o chão por alguns segundos depois do abate
+- Itens prontos para capturar: Gold, Greater Health/Mana Potion, Life Pendant e Soldier Set
+- Poção de vida urgente: abaixo de um limite bebe quase sem esperar a recarga
+- Para e vibra se a vida ficar crítica mesmo bebendo, ou se o Vampire King (boss) aparecer
+- Passeio inteligente: anda em linha reta e troca de direção quando bate na parede
+- Contador da sessão (abates, itens, poções) na tela Início e na aba Hunt
+- Rota gravada: você anda pelo jogo e o app mede o caminho; depois o bot refaz a rota, para nos pontos de caça (📍) e volta ao caminho depois de lutar
+
 #id 2026-10-29-b
 #titulo Melhorias para o Rucoy Online
 - Passeia sozinho tocando no chão quando não há monstro (o mapa virou opcional)

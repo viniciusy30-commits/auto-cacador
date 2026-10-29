@@ -54,8 +54,8 @@ class MainActivity : AppCompatActivity() {
         val bar = LinearLayout(this)
         bar.orientation = HORZ
         bar.setBackgroundColor(Pal.CARD)
-        val names = listOf("Início", "Alvos", "Ações", "Mapa", "Ajustes")
-        val kinds = listOf(IconView.HOME, IconView.TARGET, IconView.FLASK, IconView.MAP, IconView.GEAR)
+        val names = listOf("Início", "Hunt", "Alvos", "Ações", "Mapa", "Ajustes")
+        val kinds = listOf(IconView.HOME, IconView.DROP, IconView.TARGET, IconView.FLASK, IconView.MAP, IconView.GEAR)
         for (i in names.indices) {
             val col = LinearLayout(this)
             col.orientation = VERT
@@ -86,9 +86,10 @@ class MainActivity : AppCompatActivity() {
         content.removeAllViews()
         when (tab) {
             0 -> pageHome()
-            1 -> pageTargets()
-            2 -> pageActions()
-            3 -> pageMap()
+            1 -> pageHunt()
+            2 -> pageTargets()
+            3 -> pageActions()
+            4 -> pageMap()
             else -> pageSettings()
         }
         if (anim) {
@@ -219,8 +220,15 @@ class MainActivity : AppCompatActivity() {
         hero.put(text("Este app olha a tela do seu jogo, acha o monstro pelo nome, ataca, usa poções e skills, troca de lugar pelo mapa quando não tem monstro e pega os itens do chão. Tudo é configurado aqui, passo a passo.", 14f, Pal.SUB), 6)
         add(hero, 4)
 
-        val nm = cfg.targets.count { !it.isItem && it.enabled }
-        val ni = cfg.targets.count { it.isItem && it.enabled }
+        if (cfg.profile == "vampire") {
+            val pc = card()
+            pc.put(text("Perfil ativo: Hunt de Vampire", 15f, Pal.OK, true), 0)
+            pc.put(text("Siga o passo a passo na aba Hunt.", 12f, Pal.SUB), 2)
+            add(pc, 10)
+        }
+
+        val nm = cfg.targets.count { !it.isItem && !it.alert && it.enabled && it.ready() }
+        val ni = cfg.targets.count { it.isItem && it.enabled && it.ready() }
         val mapOk = cfg.mapBtn != null && cfg.dests.isNotEmpty()
         val st = card()
         st.put(text("Situação", 16f, Pal.TXT, true), 0)
@@ -231,6 +239,7 @@ class MainActivity : AppCompatActivity() {
         st.status("Poções/skills com botão (opcional)", cfg.actions.any { it.btn != null }, "${cfg.actions.count { it.btn != null }}")
         st.status("Mapa configurado (opcional)", mapOk, if (mapOk) "sim" else "não")
         add(st)
+        statsCard()
 
         if (svc == null) {
             add(button("Ativar serviço de acessibilidade") {
@@ -280,6 +289,150 @@ class MainActivity : AppCompatActivity() {
         add(g)
     }
 
+    // ---------- ROTA GRAVADA ----------
+    private fun routeCard() {
+        val cfg = Store.cfg
+        val n = cfg.route.size
+        val holds = cfg.route.count { it.hold }
+        val c = card()
+        c.put(text("Rota gravada", 16f, Pal.TXT, true), 0)
+        c.put(text(if (n >= 2) "$n pontos, $holds de caça. A rota começa no lugar onde você a gravou: inicie o bot com o personagem nesse ponto." else "Nenhuma rota gravada ainda.", 13f, if (n >= 2) Pal.OK else Pal.SUB), 4)
+        c.put(text("Como gravar:\n1. Leve o personagem ao ponto de partida (por exemplo, a entrada do Vampire Lair).\n2. Toque em Gravar rota e volte ao jogo.\n3. Ande pelo caminho que o bot deve fazer. Toque em 📍 nos lugares onde ele deve parar e esperar monstros.\n4. Toque em Salvar.\n\nO app mede o quanto o cenário rola enquanto você anda, então a rota não depende de coordenadas do jogo (o Rucoy não mostra nenhuma). Se o bot sair do caminho ou perder a posição, ele para e avisa: leve o personagem ao ponto inicial e comece de novo.", 12f, Pal.SUB), 6)
+        c.put(button(if (n >= 2) "Gravar de novo" else "Gravar rota", Pal.ACC) {
+            val s = needService()
+            if (s != null) {
+                s.startRecording()
+                moveTaskToBack(true)
+            }
+        }, 10)
+        if (n >= 2) {
+            c.put(button("Apagar rota", Pal.CARD2) {
+                confirm("Apagar a rota gravada?") {
+                    cfg.route.clear()
+                    cfg.routeOn = false
+                    Store.save()
+                    render(false)
+                }
+            }, 8)
+        }
+        add(c, 12)
+        toggle("Seguir a rota", "Ligado: quando não há monstro nem item, o bot anda pela rota gravada. Se um monstro aparecer, ele luta e depois volta para o caminho.", cfg.routeOn && n >= 2) { cfg.routeOn = it }
+        slider("Espera nos pontos de caça", "Quanto tempo o bot fica parado em cada ponto marcado com 📍, esperando monstros.",
+            0, 60, cfg.routeHoldSec, { if (it == 0) "não espera" else "$it s" }) { cfg.routeHoldSec = it }
+        toggle("Ir e voltar", "Ligado: ao chegar no fim da rota, volta pelo mesmo caminho. Desligado: volta em linha reta para o começo (pode atravessar paredes).", cfg.routePing) { cfg.routePing = it }
+    }
+
+    // ---------- ESTATÍSTICAS ----------
+    private fun statsCard() {
+        val svc = BotService.inst ?: return
+        val st = svc.engine.stats
+        if (!svc.engine.running && st.kills == 0 && st.items == 0 && st.hp == 0) return
+        val c = card()
+        c.put(text(if (svc.engine.running) "Sessão em andamento" else "Última sessão", 16f, Pal.TXT, true), 0)
+        c.put(text("⏱ ${st.elapsed()}   ⚔ ${st.kills} abates   🎒 ${st.items} itens", 14f, Pal.TXT), 6)
+        c.put(text("Poções de vida: ${st.hp}   Poções de mana: ${st.mp}   Skills: ${st.skills}", 12f, Pal.SUB), 4)
+        c.put(text("Abates e itens são contados pela imagem, então são aproximados. Toque na aba para atualizar.", 11f, Pal.SUB), 4)
+        add(c, 10)
+    }
+
+    // ---------- HUNT (VAMPIRE) ----------
+    private fun slotRow(c: LinearLayout, s: Vampire.Slot) {
+        val t = Store.cfg.targets.firstOrNull { it.slot == s.key }
+        val ok = t != null && t.ready()
+        val r = LinearLayout(this)
+        r.orientation = HORZ
+        r.gravity = Gravity.CENTER_VERTICAL
+        val dot = View(this)
+        dot.background = rounded(if (ok) Pal.OK else Pal.WARN, dp(6).toFloat())
+        r.addView(dot, LinearLayout.LayoutParams(dp(12), dp(12)))
+        val tv = text(s.name, 14f, Pal.TXT, true)
+        tv.setPadding(dp(10), 0, dp(8), 0)
+        r.addView(tv, LinearLayout.LayoutParams(0, WC, 1f))
+        r.addView(button(if (ok) "Refazer" else "Capturar", if (ok) Pal.CARD2 else Pal.ACC) {
+            if (t != null) captureTarget(s.kind, t)
+        }, LinearLayout.LayoutParams(WC, WC))
+        c.put(r, 10)
+        c.put(text(s.hint, 11f, Pal.SUB), 2)
+    }
+
+    private fun slotCard(title: String, desc: String, slots: List<Vampire.Slot>) {
+        val c = card()
+        c.put(text(title, 16f, Pal.TXT, true), 0)
+        c.put(text(desc, 12f, Pal.SUB), 2)
+        for (s in slots) slotRow(c, s)
+        add(c, 12)
+    }
+
+    private fun pageHunt() {
+        val cfg = Store.cfg
+        val svc = BotService.inst
+        val active = cfg.profile == "vampire"
+        if (active) Vampire.ensure(cfg)
+
+        val hero = card()
+        hero.put(text("Hunt de Vampire", 22f, Pal.TXT, true), 0)
+        hero.put(text("Vampire Lair: Vampire (Lv 100, 450 de vida) e Red Vampire (Lv 110, 530 de vida). Os dois FOGEM quando a vida deles fica vermelha, por isso este perfil persegue mais rápido, bebe poção mais cedo, varre o chão depois de cada abate e anda em linha reta trocando de direção quando bate na parede.\n\nDrops: Gold, Greater Health e Mana Potion, Life Pendant e peças do Soldier Set. O boss Vampire King (350.000 de vida) nasce na mesma região: capture o nome dele como alerta e o bot para quando ele aparecer.", 13f, Pal.SUB), 6)
+        hero.put(button(if (active) "Reaplicar perfil Vampire" else "Aplicar perfil Vampire", Pal.OK) {
+            confirm("Trocar os ajustes de busca, tempos e passeio pelos do perfil Vampire? Seus alvos capturados e botões continuam salvos.") {
+                Vampire.applyProfile(cfg)
+                Toast.makeText(this, "Perfil Vampire aplicado!", Toast.LENGTH_SHORT).show()
+                render(false)
+            }
+        }, 12)
+        add(hero, 4)
+        statsCard()
+        if (!active) {
+            tip("Comece por aqui", "Toque em \"Aplicar perfil Vampire\". Ele ajusta o bot para o Vampire Lair e cria os espaços de captura (vampires, itens, alertas, poções).")
+            return
+        }
+
+        val miss = Vampire.missing(cfg)
+        val chk = card()
+        chk.put(text(if (miss.isEmpty()) "Pronto para caçar" else "Falta para começar", 16f, if (miss.isEmpty()) Pal.OK else Pal.WARN, true), 0)
+        if (miss.isEmpty()) {
+            chk.put(text("O essencial está configurado. Os itens e alertas abaixo são opcionais, mas quanto mais você capturar, melhor.", 12f, Pal.SUB), 4)
+        } else {
+            for (m in miss) chk.put(text("• $m", 13f, Pal.TXT), 4)
+        }
+        add(chk, 12)
+        if (svc != null && miss.isEmpty()) {
+            if (svc.engine.running) {
+                add(button("Parar bot", Pal.BAD) { svc.engine.stop(); render(false) }, 10)
+            } else {
+                add(button("Iniciar hunt", Pal.OK) {
+                    if (Build.VERSION.SDK_INT < 30) {
+                        info("Android muito antigo", "Precisa de Android 11 ou mais novo.")
+                    } else {
+                        svc.showPanel()
+                        svc.engine.start()
+                        Toast.makeText(this, "Bot iniciado! Abra o jogo no Vampire Lair. Pare pelo painel flutuante.", Toast.LENGTH_LONG).show()
+                        moveTaskToBack(true)
+                    }
+                }, 10)
+            }
+        } else if (svc == null) {
+            tip("Serviço desligado", "Ative o serviço de acessibilidade na aba Início para poder capturar e iniciar.")
+        }
+
+        slotCard("1. Monstros", "Fique perto de um vampire com o nome aparecendo e capture o nome dele. Capture o Red Vampire também, se for caçar os dois.", Vampire.monsters)
+        slotCard("2. Loot", "Mate um vampire e capture cada item caído no chão, um por vez (recorte justo no item). O bot só pega o que você capturou, então pule o que não quer.", Vampire.loot)
+
+        val pots = card()
+        pots.put(text("3. Poções e skills", 16f, Pal.TXT, true), 0)
+        pots.put(text("Poção de vida: aponte o botão dela e arraste uma linha na barra de vida CHEIA. O perfil bebe abaixo de 55% e, abaixo de 30%, bebe quase sem esperar a recarga. Para pela segurança se a vida ficar abaixo de 15% por 4 s.", 12f, Pal.SUB), 4)
+        for (a in cfg.actions) {
+            val ready = a.btn != null && (a.type == ActionType.SKILL || a.bar2 != null)
+            val tail = if (!a.enabled) "desligada" else if (a.btn == null) "falta o botão" else if (a.type != ActionType.SKILL && a.bar2 == null) "falta a barra" else "ok"
+            pots.status(a.name, ready && a.enabled, tail)
+        }
+        pots.put(button("Configurar na aba Ações", Pal.ACC) { tab = 3; render(true) }, 12)
+        add(pots, 12)
+
+        routeCard()
+
+        slotCard("4. Segurança (recomendado)", "Capture estes textos quando aparecerem. Se algum surgir na tela, o bot para na hora e o celular vibra.", Vampire.alerts)
+    }
+
     // ---------- ALVOS ----------
     private fun pageTargets() {
         tip("Como o app acha as coisas",
@@ -287,16 +440,32 @@ class MainActivity : AppCompatActivity() {
                 "• Recorte justo, só o texto do nome, sem muito cenário em volta.\n" +
                 "• Se o monstro tem nomes diferentes, capture um de cada.\n" +
                 "• Depois de trocar a resolução ou o tamanho da interface do jogo, capture de novo.")
-        targetSection(false)
-        targetSection(true)
+        targetSection(0)
+        targetSection(1)
+        targetSection(2)
     }
 
-    private fun targetSection(isItem: Boolean) {
-        val list = Store.cfg.targets.filter { it.isItem == isItem }
-        add(text(if (isItem) "Itens do chão (por foto)" else "Monstros (pelo nome)", 18f, Pal.TXT, true), 18)
+    private fun kindOf(t: Target): Int = if (t.alert) 2 else if (t.isItem) 1 else 0
+
+    private fun targetSection(kind: Int) {
+        val list = Store.cfg.targets.filter { kindOf(it) == kind }
+        val title = when (kind) {
+            1 -> "Itens do chão (por foto)"
+            2 -> "Alertas (param o bot)"
+            else -> "Monstros (pelo nome)"
+        }
+        add(text(title, 18f, Pal.TXT, true), 18)
+        if (kind == 2) {
+            add(text("Se um destes textos aparecer na tela (boss, tela de morte...), o bot para na hora e o celular vibra.", 12f, Pal.SUB), 4)
+        }
         if (list.isEmpty()) add(text("Nenhum ainda.", 13f, Pal.SUB), 6)
         for (t in list) add(targetRow(t), 8)
-        add(button(if (isItem) "Capturar item" else "Capturar nome de monstro") { captureTarget(isItem) }, 10)
+        val label = when (kind) {
+            1 -> "Capturar item"
+            2 -> "Capturar alerta"
+            else -> "Capturar nome de monstro"
+        }
+        add(button(label) { captureTarget(kind) }, 10)
     }
 
     private fun targetRow(t: Target): View {
@@ -309,6 +478,7 @@ class MainActivity : AppCompatActivity() {
         img.setBackgroundColor(Pal.BG)
         val bm: Bitmap? = BitmapFactory.decodeFile(File(Store.tplDir(), t.file).path)
         if (bm != null) img.setImageBitmap(bm)
+        img.setOnClickListener { captureTarget(kindOf(t), t) }
         r.addView(img, LinearLayout.LayoutParams(dp(90), dp(44)))
         val nm = text(t.name, 15f, Pal.TXT, true)
         nm.setPadding(dp(12), 0, dp(8), 0)
@@ -331,7 +501,7 @@ class MainActivity : AppCompatActivity() {
         lp.leftMargin = dp(8)
         r.addView(del, lp)
         c.put(r, 0)
-        c.put(text("Toque no nome para renomear.", 11f, Pal.SUB), 4)
+        c.put(text(if (t.ready()) "Toque no nome para renomear, na foto para refazer." else "Sem foto ainda: toque no quadro escuro para capturar.", 11f, if (t.ready()) Pal.SUB else Pal.WARN), 4)
         return c
     }
 
@@ -350,23 +520,40 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("Cancelar", null).show()
     }
 
-    private fun captureTarget(isItem: Boolean) {
+    /** kind: 0 = monstro, 1 = item, 2 = alerta. Se "t" vier preenchido, troca a foto desse alvo. */
+    private fun captureTarget(kind: Int, t: Target? = null) {
         val s = needService() ?: return
-        val banner = if (isItem) "Abra o jogo e deixe o ITEM visível no chão. Depois toque em \"Capturar agora\"."
-        else "Abra o jogo e deixe o monstro com o NOME visível. Depois toque em \"Capturar agora\"."
-        val pick = if (isItem) "Arraste um retângulo bem justo em volta do ITEM e toque em Confirmar."
-        else "Arraste um retângulo bem justo em volta do NOME do monstro e toque em Confirmar."
+        val nm = if (t != null) "\"${t.name}\"" else "que quer capturar"
+        val banner = when (kind) {
+            1 -> "Deixe o item $nm caído no chão, visível na tela do jogo. Depois toque em \"Capturar agora\"."
+            2 -> "Deixe o texto de alerta $nm visível na tela do jogo. Depois toque em \"Capturar agora\"."
+            else -> "Deixe o monstro $nm com o NOME visível na tela do jogo. Depois toque em \"Capturar agora\"."
+        }
+        val pick = if (kind == 1) "Arraste um retângulo bem justo em volta do ITEM e toque em Confirmar."
+        else "Arraste um retângulo bem justo em volta do NOME/TEXTO e toque em Confirmar."
         s.startCapture(banner, pick, true) { r ->
             val crop = r.crop
             if (crop != null) {
-                val ok = Matcher.makeTpl(Matcher.toGray(crop, 2), !isItem) != null
+                val ok = Matcher.makeTpl(Matcher.toGray(crop, 2), kind != 1) != null
                 if (!ok) {
                     s.toast("Recorte pequeno ou liso demais. Tente de novo, pegando o nome inteiro.")
                 } else {
                     val id = System.currentTimeMillis().toString()
                     FileOutputStream(File(Store.tplDir(), "$id.png")).use { crop.compress(Bitmap.CompressFormat.PNG, 100, it) }
-                    val n = Store.cfg.targets.count { it.isItem == isItem } + 1
-                    Store.cfg.targets.add(Target(id, (if (isItem) "Item " else "Monstro ") + n, isItem, "$id.png"))
+                    if (t != null) {
+                        if (t.file.isNotBlank()) File(Store.tplDir(), t.file).delete()
+                        t.file = "$id.png"
+                    } else {
+                        val n = Store.cfg.targets.count { kindOf(it) == kind } + 1
+                        val base = when (kind) {
+                            1 -> "Item "
+                            2 -> "Alerta "
+                            else -> "Monstro "
+                        }
+                        val nt = Target(id, base + n, kind == 1, "$id.png")
+                        nt.alert = kind == 2
+                        Store.cfg.targets.add(nt)
+                    }
                     Store.save()
                 }
             }
@@ -420,7 +607,7 @@ class MainActivity : AppCompatActivity() {
         c.put(text(a.type.label, 12f, Pal.ACC), 2)
         c.put(text("Botão: " + if (a.btn != null) "definido" else "NÃO definido", 13f, if (a.btn != null) Pal.OK else Pal.WARN), 8)
         if (a.type != ActionType.SKILL) {
-            c.put(text("Barra: " + (if (a.bar2 != null) "definida (bebe abaixo de ${a.pct}%)" else if (a.bar != null) "definida (modo ponto)" else "não definida (usa só a recarga)"), 13f, Pal.SUB), 2)
+            c.put(text("Barra: " + (if (a.bar2 != null) "definida (bebe abaixo de ${a.pct}%" + (if (a.urgentPct > 0) ", urgente abaixo de ${a.urgentPct}%)" else ")") else if (a.bar != null) "definida (modo ponto)" else "não definida (usa só a recarga)"), 13f, Pal.SUB), 2)
         }
         c.put(text("Recarga: ${a.cooldownSec} s", 13f, Pal.SUB), 2)
         val row = LinearLayout(this)
@@ -480,17 +667,25 @@ class MainActivity : AppCompatActivity() {
         val pc = EditText(this)
         pc.setText(a.pct.toString())
         pc.inputType = InputType.TYPE_CLASS_NUMBER
+        val ur = EditText(this)
+        ur.setText(a.urgentPct.toString())
+        ur.inputType = InputType.TYPE_CLASS_NUMBER
         if (a.type != ActionType.SKILL) {
             val l2 = text("Beber quando a barra ficar abaixo de (%)", 12f, Pal.SUB)
             l2.setPadding(0, dp(10), 0, 0)
             lay.addView(l2)
             lay.addView(pc)
+            val l3 = text("Urgente abaixo de (%): bebe quase sem esperar a recarga. 0 = desligado", 12f, Pal.SUB)
+            l3.setPadding(0, dp(10), 0, 0)
+            lay.addView(l3)
+            lay.addView(ur)
         }
         val b = AlertDialog.Builder(this).setTitle("Editar").setView(lay)
             .setPositiveButton("Salvar") { _, _ ->
                 a.name = n.text.toString().ifBlank { a.name }
                 a.cooldownSec = cd.text.toString().replace(',', '.').toFloatOrNull()?.coerceIn(0.5f, 600f) ?: a.cooldownSec
                 a.pct = pc.text.toString().toIntOrNull()?.coerceIn(5, 95) ?: a.pct
+                a.urgentPct = ur.text.toString().toIntOrNull()?.coerceIn(0, 60) ?: a.urgentPct
                 Store.save()
                 render(false)
             }
@@ -505,7 +700,9 @@ class MainActivity : AppCompatActivity() {
         tip("Trocar de lugar",
             "Quando o app não vê nenhum monstro por alguns segundos, ele passeia (toca em pontos do chão ao redor do personagem) ou, se você ligar a opção do mapa, toca no botão do mapa, toca num dos destinos que você marcou, fecha o mapa (se você definiu o botão de fechar) e caminha. Se achar um monstro no caminho, para e ataca.\n\n" +
                 "Para marcar um destino: abra o MAPA no jogo ANTES de tocar em \"Capturar agora\", e toque no lugar desejado.")
+        routeCard()
         toggle("Usar o mapa para trocar de lugar", "Desligado (padrão): o app passeia tocando no chão perto do personagem. No Rucoy Online se anda tocando na tela. Ligado: usa o botão do mapa e os destinos abaixo.", cfg.useMap) { cfg.useMap = it }
+        toggle("Passeio inteligente (explorar)", "Ligado: anda em linha reta numa direção, percebe quando bate na parede (a tela não anda) e troca de direção. Desligado: toques aleatórios ao redor do personagem.", cfg.explore) { cfg.explore = it }
         slider("Alcance do passeio", "Até que distância do personagem o app toca para andar (porcentagem da largura da tela).",
             10, 45, cfg.wanderPct, { "$it%" }) { cfg.wanderPct = it }
         slider("Tempo andando por toque", "Quanto o app espera andando depois de cada toque de passeio.",
@@ -596,6 +793,13 @@ class MainActivity : AppCompatActivity() {
         c.mBottom = 0
         c.mLeft = 0
         c.mRight = 0
+        c.profile = ""
+        c.explore = false
+        c.chaseSec = 3f
+        c.lootSweepSec = 0f
+        c.lootNearPct = 0
+        c.lootTries = 3
+        c.panicPct = 0
         Store.save()
     }
 
@@ -624,6 +828,18 @@ class MainActivity : AppCompatActivity() {
         toggle("Atacar o monstro mais perto", "Ligado: entre vários monstros, vai no mais perto do centro da tela (onde fica o personagem). Desligado: vai no que mais se parece com a foto.", cfg.nearest) { cfg.nearest = it }
         slider("Desistir do monstro após", "Se ficar tentando o mesmo lugar por tanto tempo (monstro inalcançável), ignora por um tempo.",
             10, 120, cfg.giveUpSec, { "$it s" }) { cfg.giveUpSec = it }
+        slider("Perseguir monstro que foge", "Intervalo entre toques enquanto o monstro está se mexendo (vampire foge com a vida vermelha). Menor = persegue mais rápido.",
+            5, 30, (cfg.chaseSec * 10).toInt(), { "${it / 10.0} s" }) { cfg.chaseSec = it / 10f }
+        slider("Varrer loot depois do abate", "Depois que o monstro some, espera e procura itens no chão por este tempo antes de sair andando.",
+            0, 15, cfg.lootSweepSec.toInt(), { if (it == 0) "desligado" else "$it s" }) { cfg.lootSweepSec = it.toFloat() }
+        slider("Pegar item perto durante a luta", "Mesmo com monstro por perto, pega itens que caíram até esta distância do personagem (se a vida estiver acima de 50%). 0 = só pega quando não há monstro.",
+            0, 50, cfg.lootNearPct, { if (it == 0) "desligado" else "$it%" }) { cfg.lootNearPct = it }
+        slider("Tentativas por item", "Quantas vezes toca no mesmo item antes de desistir dele (parede no caminho, por exemplo).",
+            2, 10, cfg.lootTries, { "$it" }) { cfg.lootTries = it }
+        slider("Parar se a vida ficar crítica", "Se a vida ficar abaixo disso mesmo bebendo poção, o bot para e o celular vibra. Precisa da barra de vida configurada.",
+            0, 40, cfg.panicPct, { if (it == 0) "desligado" else "$it%" }) { cfg.panicPct = it }
+        slider("Tempo em vida crítica", "Quanto tempo a vida precisa ficar crítica antes de parar.",
+            2, 15, cfg.panicSec, { "$it s" }) { cfg.panicSec = it }
         toggle("Pegar itens antes de atacar", "Ligado: se houver item no chão, pega primeiro. Desligado: só pega quando não houver monstro.", cfg.lootFirst) { cfg.lootFirst = it }
         add(text("Área de busca", 18f, Pal.TXT, true), 18)
         add(text("Ignore partes da tela onde aparece o nome do seu personagem, chat ou barras, para o app não confundir.", 12f, Pal.SUB), 4)
