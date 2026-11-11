@@ -103,6 +103,28 @@ class PickView(ctx: Context, private val bmp: Bitmap, private val region: Boolea
     }
 }
 
+/** Mostra a captura de tela com caixas em volta do que o bot enxergou (teste de detecção). */
+class DetectView(ctx: Context, private val bmp: Bitmap, private val boxes: List<Vision.Box>) : View(ctx) {
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    override fun onDraw(c: Canvas) {
+        c.drawBitmap(bmp, null, Rect(0, 0, width, height), null)
+        c.drawColor(0x55000000)
+        val sx = width / bmp.width.toFloat()
+        val sy = height / bmp.height.toFloat()
+        for (b in boxes) {
+            val col = if (b.kind == 0) Pal.OK else if (b.kind == 1) Pal.WARN else Pal.BAD
+            p.style = Paint.Style.STROKE
+            p.strokeWidth = 4f
+            p.color = col
+            c.drawRect(b.x0 * sx, b.y0 * sy, b.x1 * sx, b.y1 * sy, p)
+            p.style = Paint.Style.FILL
+            p.textSize = 26f
+            c.drawText(b.label, b.x0 * sx, maxOf(28f, b.y0 * sy - 8f), p)
+        }
+    }
+}
+
 class BotService : AccessibilityService() {
     companion object {
         @Volatile var inst: BotService? = null
@@ -118,6 +140,7 @@ class BotService : AccessibilityService() {
     private var playIcon: IconView? = null
     private var banner: View? = null
     private var pickLayer: View? = null
+    private var detectLayer: View? = null
     val rec = RouteRecorder(this)
     private var recBanner: View? = null
     private var recTv: TextView? = null
@@ -190,9 +213,10 @@ class BotService : AccessibilityService() {
 
     private fun removeAll() {
         removeView(panel); panel = null
-        closeBanner(); closePick(); closeRec()
+        closeBanner(); closePick(); closeRec(); closeDetect()
     }
 
+    private fun closeDetect() { removeView(detectLayer); detectLayer = null }
     private fun closeBanner() { removeView(banner); banner = null }
     private fun closePick() { removeView(pickLayer); pickLayer = null }
     private fun closeRec() { removeView(recBanner); recBanner = null; recTv = null }
@@ -262,30 +286,43 @@ class BotService : AccessibilityService() {
     // ---------- tela e toques ----------
     fun shot(): Bitmap? {
         if (Build.VERSION.SDK_INT < 30) return null
-        val latch = CountDownLatch(1)
-        var out: Bitmap? = null
-        try {
-            takeScreenshot(Display.DEFAULT_DISPLAY, exec, object : AccessibilityService.TakeScreenshotCallback {
-                override fun onSuccess(r: AccessibilityService.ScreenshotResult) {
-                    try {
-                        val hb = r.hardwareBuffer
-                        val hw = Bitmap.wrapHardwareBuffer(hb, r.colorSpace)
-                        out = hw?.copy(Bitmap.Config.ARGB_8888, false)
-                        hw?.recycle()
-                        hb.close()
-                    } catch (e: Throwable) {
-                    } finally {
+        for (attempt in 0 until 3) {
+            val latch = CountDownLatch(1)
+            var out: Bitmap? = null
+            var err = 0
+            try {
+                takeScreenshot(Display.DEFAULT_DISPLAY, exec, object : AccessibilityService.TakeScreenshotCallback {
+                    override fun onSuccess(r: AccessibilityService.ScreenshotResult) {
+                        try {
+                            val hb = r.hardwareBuffer
+                            val hw = Bitmap.wrapHardwareBuffer(hb, r.colorSpace)
+                            out = hw?.copy(Bitmap.Config.ARGB_8888, false)
+                            hw?.recycle()
+                            hb.close()
+                        } catch (e: Throwable) {
+                        } finally {
+                            latch.countDown()
+                        }
+                    }
+
+                    override fun onFailure(errorCode: Int) {
+                        err = errorCode
                         latch.countDown()
                     }
-                }
-
-                override fun onFailure(errorCode: Int) { latch.countDown() }
-            })
-        } catch (e: Throwable) {
+                })
+            } catch (e: Throwable) {
+                return null
+            }
+            latch.await(4, TimeUnit.SECONDS)
+            if (out != null) return out
+            // 3 = o Android pede um intervalo maior entre capturas: espera e tenta de novo
+            if (err == 3) {
+                Thread.sleep(400)
+                continue
+            }
             return null
         }
-        latch.await(4, TimeUnit.SECONDS)
-        return out
+        return null
     }
 
     fun tap(x: Float, y: Float): Boolean {
@@ -372,6 +409,103 @@ class BotService : AccessibilityService() {
             statusTv = st
             playIcon = play
         }
+    }
+
+    // ---------- teste de detecção ----------
+    /** Mostra um aviso para você abrir o jogo; ao tocar em "Testar agora" o app olha a tela e desenha o que achou. */
+    fun startTest() {
+        ui.post {
+            val w = wm ?: return@post
+            if (engine.running) { toast("Pare o bot antes de testar."); return@post }
+            if (Build.VERSION.SDK_INT < 30) { toast("O teste precisa de Android 11 ou mais novo."); return@post }
+            closeBanner(); closePick(); closeDetect()
+            val box = LinearLayout(this)
+            box.orientation = LinearLayout.VERTICAL
+            box.setPadding(dp(14), dp(12), dp(14), dp(12))
+            box.background = rounded(Color.parseColor("#F21A1F36"), dp(18).toFloat(), Pal.ACC, dp(1))
+            val t = text("Abra o jogo no Vampire Lair, com um vampire e itens à vista. Depois toque em \"Testar agora\". Nada será tocado.", 13f)
+            t.maxWidth = dp(300)
+            box.addView(t)
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            val b1 = LinearLayout.LayoutParams(0, WC, 1f)
+            b1.topMargin = dp(10); b1.rightMargin = dp(6)
+            val b2 = LinearLayout.LayoutParams(0, WC, 1f)
+            b2.topMargin = dp(10); b2.leftMargin = dp(6)
+            row.addView(button("Testar agora") { runTest() }, b1)
+            row.addView(button("Cancelar", Pal.BAD) { closeBanner() }, b2)
+            box.addView(row, LinearLayout.LayoutParams(MP, WC))
+            val lp = overlayLp(WC, WC, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+            lp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            lp.y = dp(36)
+            try { w.addView(box, lp) } catch (e: Exception) { return@post }
+            banner = box
+        }
+    }
+
+    private fun runTest() {
+        closeBanner()
+        val old = panel?.visibility ?: View.VISIBLE
+        panel?.visibility = View.INVISIBLE
+        ui.postDelayed({
+            Thread {
+                val b: Bitmap? = shot()
+                var r: Vision.Report? = null
+                try {
+                    if (b != null) r = Vision.report(b)
+                } catch (e: Throwable) {
+                    r = null
+                }
+                val rr = r
+                ui.post {
+                    panel?.visibility = old
+                    if (b == null || rr == null) {
+                        toast("Não consegui analisar a tela. Precisa do Android 11+ e o jogo não pode bloquear capturas.")
+                    } else {
+                        showDetect(b, rr)
+                    }
+                }
+            }.start()
+        }, 400)
+    }
+
+    private fun showDetect(bmp: Bitmap, rep: Vision.Report) {
+        val w = wm ?: return
+        val dm = DisplayMetrics()
+        @Suppress("DEPRECATION")
+        w.defaultDisplay.getRealMetrics(dm)
+        closeDetect()
+        val root = FrameLayout(this)
+        root.addView(DetectView(this, bmp, rep.boxes), FrameLayout.LayoutParams(MP, MP))
+        val tip = text(
+            "Verde = monstro · Amarelo = item · Vermelho = alerta\n" + rep.lines.joinToString("\n"),
+            13f
+        )
+        tip.setPadding(dp(14), dp(10), dp(14), dp(10))
+        tip.background = rounded(Color.parseColor("#F21A1F36"), dp(14).toFloat(), Pal.OK, dp(1))
+        tip.maxWidth = (dm.widthPixels * 0.9f).toInt()
+        val tlp = FrameLayout.LayoutParams(WC, WC, Gravity.TOP or Gravity.CENTER_HORIZONTAL)
+        tlp.topMargin = dp(24)
+        root.addView(tip, tlp)
+        val bar = LinearLayout(this)
+        bar.orientation = LinearLayout.HORIZONTAL
+        val c1 = LinearLayout.LayoutParams(dp(150), WC)
+        c1.rightMargin = dp(8)
+        val c2 = LinearLayout.LayoutParams(dp(150), WC)
+        c2.leftMargin = dp(8)
+        bar.addView(button("Testar de novo") { closeDetect(); startTest() }, c1)
+        bar.addView(button("Fechar", Pal.BAD) { closeDetect(); openApp() }, c2)
+        val blp = FrameLayout.LayoutParams(WC, WC, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
+        blp.bottomMargin = dp(24)
+        root.addView(bar, blp)
+        val lp = overlayLp(
+            dm.widthPixels, dm.heightPixels,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        )
+        lp.gravity = Gravity.TOP or Gravity.START
+        if (Build.VERSION.SDK_INT >= 28) lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        try { w.addView(root, lp) } catch (e: Exception) { return }
+        detectLayer = root
     }
 
     // ---------- captura (ponto ou região) ----------

@@ -1,8 +1,6 @@
 package com.vinicius.autocacador
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import java.io.File
 import java.util.Random
 
 /** Números da sessão atual (os de abates e itens são aproximados). */
@@ -28,10 +26,7 @@ class BotEngine(private val svc: BotService) {
     @Volatile private var stopMsg: String? = null
     private var th: Thread? = null
 
-    private class T(val t: Target, val tpl: Matcher.Tpl)
-    private class Found(val t: T, val hit: Matcher.Hit)
-
-    private val sc = 2
+    private val sc = Vision.SC
     private val rnd = Random()
 
     // 8 direções para explorar: N, NE, L, SE, S, SO, O, NO
@@ -80,46 +75,8 @@ class BotEngine(private val svc: BotService) {
         }
     }
 
-    private fun kindOf(t: Target): Int = if (t.alert) 2 else if (t.isItem) 1 else 0
-
-    /** kind: 0 = monstros, 1 = itens, 2 = alertas. */
-    private fun load(kind: Int): List<T> {
-        val out = ArrayList<T>()
-        for (t in Store.cfg.targets) {
-            if (kindOf(t) != kind || !t.enabled || !t.ready()) continue
-            val b = BitmapFactory.decodeFile(File(Store.tplDir(), t.file).path) ?: continue
-            val g = Matcher.toGray(b, sc)
-            b.recycle()
-            val tpl = Matcher.makeTpl(g, kind != 1) ?: continue
-            out.add(T(t, tpl))
-        }
-        return out
-    }
-
-    /** Escolhe o acerto mais perto do centro (nearest) ou o mais parecido com a foto. */
-    private fun best(
-        g: Gray, list: List<T>, x0: Int, y0: Int, x1: Int, y1: Int, min: Float,
-        nearest: Boolean, skip: (Int, Int) -> Boolean
-    ): Found? {
-        val cx = (x0 + x1) / 2
-        val cy = (y0 + y1) / 2
-        var b: Found? = null
-        var bd = Long.MAX_VALUE
-        for (t in list) {
-            if (!running) break
-            for (h in Matcher.findAll(g, t.tpl, x0, y0, x1, y1, min)) {
-                if (skip(h.x * sc, h.y * sc)) continue
-                val dx = (h.x - cx).toLong()
-                val dy = (h.y - cy).toLong()
-                val d = if (nearest) dx * dx + dy * dy else ((1f - h.score) * 1000000f).toLong()
-                if (d < bd) {
-                    bd = d
-                    b = Found(t, h)
-                }
-            }
-        }
-        return b
-    }
+    /** Pequena variação (px) para os toques no mundo. */
+    private fun jit(): Float = (rnd.nextFloat() * 2f - 1f) * Store.cfg.tapJitter
 
     /** Assinatura barata da cena (grade de pontos) para saber se a tela mexeu. */
     private fun sig(g: Gray, x0: Int, y0: Int, x1: Int, y1: Int): IntArray {
@@ -154,56 +111,66 @@ class BotEngine(private val svc: BotService) {
         return ok[rnd.nextInt(ok.size)]
     }
 
+    private class Vit(var hp: Int, var urgent: Boolean)
+
     /**
-     * Poções e skills. Poção de vida vem primeiro. Devolve a menor vida medida (0..100),
-     * ou -1 se não há barra de vida configurada.
+     * Poções de vida e mana. Roda ANTES de procurar monstros (a procura demora e a vida não espera).
+     * Devolve a menor vida medida (0..100, ou -1 se não há barra) e se está em estado urgente.
      */
-    private fun actions(bmp: Bitmap, monster: Boolean, lastUse: HashMap<String, Long>): Int {
+    private fun vitals(bmp: Bitmap, lastUse: HashMap<String, Long>): Vit {
+        val v = Vit(-1, false)
         val bw = bmp.width
         val bh = bmp.height
-        var hpMin = -1
-        val list = Store.cfg.actions.sortedBy { it.type.ordinal }
+        val list = Store.cfg.actions.filter { it.type != ActionType.SKILL }.sortedBy { it.type.ordinal }
         for (a in list) {
             val b = a.btn ?: continue
             if (!a.enabled) continue
+            val bar = a.bar
+            val b2 = a.bar2
             var level = -1
-            var fire = false
-            if (a.type == ActionType.SKILL) {
-                fire = monster
+            val fire: Boolean
+            if (bar == null) {
+                fire = true
+            } else if (b2 != null) {
+                level = Matcher.fillPct(bmp, (bar.fx * bw).toInt(), (bar.fy * bh).toInt(), (b2.fx * bw).toInt(), (b2.fy * bh).toInt(), a.barColor)
+                fire = level < a.pct
             } else {
-                val bar = a.bar
-                val b2 = a.bar2
-                if (bar == null) {
-                    fire = true
-                } else if (b2 != null) {
-                    level = Matcher.fillPct(bmp, (bar.fx * bw).toInt(), (bar.fy * bh).toInt(), (b2.fx * bw).toInt(), (b2.fy * bh).toInt(), a.barColor)
-                    fire = level < a.pct
-                } else {
-                    fire = Matcher.far(Matcher.avg(bmp, (bar.fx * bw).toInt(), (bar.fy * bh).toInt()), a.barColor)
-                }
+                fire = Matcher.far(Matcher.avg(bmp, (bar.fx * bw).toInt(), (bar.fy * bh).toInt()), a.barColor)
             }
-            if (a.type == ActionType.HP && level >= 0 && (hpMin < 0 || level < hpMin)) hpMin = level
+            if (a.type == ActionType.HP && level >= 0) {
+                if (v.hp < 0 || level < v.hp) v.hp = level
+                if (a.urgentPct > 0 && level < a.urgentPct) v.urgent = true
+            }
             if (!fire) continue
             var cd = (a.cooldownSec * 1000).toLong()
             if (a.urgentPct > 0 && level in 0 until a.urgentPct) cd = minOf(cd, 900L)
             if (now() - (lastUse[a.id] ?: 0L) < cd) continue
             svc.tap(b.fx * bw, b.fy * bh)
             lastUse[a.id] = now()
-            when (a.type) {
-                ActionType.HP -> stats.hp++
-                ActionType.MP -> stats.mp++
-                ActionType.SKILL -> stats.skills++
-            }
+            if (a.type == ActionType.HP) stats.hp++ else stats.mp++
             nap(150)
         }
-        return hpMin
+        return v
+    }
+
+    /** Skills: só enquanto há monstro na tela, respeitando a recarga de cada uma. */
+    private fun skills(bw: Int, bh: Int, lastUse: HashMap<String, Long>) {
+        for (a in Store.cfg.actions) {
+            if (a.type != ActionType.SKILL || !a.enabled) continue
+            val b = a.btn ?: continue
+            if (now() - (lastUse[a.id] ?: 0L) < (a.cooldownSec * 1000).toLong()) continue
+            svc.tap(b.fx * bw, b.fy * bh)
+            lastUse[a.id] = now()
+            stats.skills++
+            nap(150)
+        }
     }
 
     private fun loop() {
         val cfg = Store.cfg
-        val mons = load(0)
-        val items = load(1)
-        val alerts = load(2)
+        val mons = Vision.load(0)
+        val items = Vision.load(1)
+        val alerts = Vision.load(2)
         if (mons.isEmpty()) {
             svc.setStatus("Nenhum monstro válido. Capture de novo na aba Alvos.")
             return
@@ -213,12 +180,15 @@ class BotEngine(private val svc: BotService) {
         else if (hpAct.bar2 == null) svc.toast("Atenção: a poção de vida está sem barra. Ela vai beber por tempo, não pela vida real.")
         svc.setStatus("Rodando… procurando monstro")
 
-        var lastActivity = now()
+        val startMs = now()
+        var lastProgress = startMs
+        var lastActivity = startMs
         var lastClick = 0L
         var travelUntil = 0L
         var destIdx = 0
         var fails = 0
         var scanN = 0
+        var urgentSkips = 0
         var focusX = -9999
         var focusY = -9999
         var focusSince = 0L
@@ -245,13 +215,14 @@ class BotEngine(private val svc: BotService) {
         val blockedUntil = LongArray(8)
         var lastExploreTap = 0L
         var exploreTaps = 0
+        var forceExplore = false
         // emergência
         var critSince = 0L
         // rota gravada: segue os pontos medindo o quanto o cenário rola (odometria visual)
         val route = cfg.route
-        val routeOn = cfg.routeOn && route.size >= 2
+        var routeActive = cfg.routeOn && route.size >= 2
         val odo = Odo()
-        if (routeOn) odo.reset(route[0].x, route[0].y)
+        if (routeActive) odo.reset(route[0].x, route[0].y)
         var ri = 1
         var rdir = 1
         var holdUntil = 0L
@@ -280,6 +251,14 @@ class BotEngine(private val svc: BotService) {
 
         while (running) {
             val t0 = now()
+            if (cfg.maxRunMin > 0 && t0 - startMs > cfg.maxRunMin * 60000L) {
+                stopWith("Tempo limite da sessão atingido. Bot parado.")
+                break
+            }
+            if (cfg.idleStopMin > 0 && t0 - lastProgress > cfg.idleStopMin * 60000L) {
+                stopWith("⚠ ${cfg.idleStopMin} min sem ver monstro nem pegar item. Bot parado (travado, perdido ou desconectado?).")
+                break
+            }
             val bmp = svc.shot()
             if (bmp == null) {
                 fails++
@@ -294,7 +273,35 @@ class BotEngine(private val svc: BotService) {
             scanN++
             val bw = bmp.width
             val bh = bmp.height
+
+            // 1) vida e mana primeiro: a procura de monstros demora e a vida não espera
+            val vit = vitals(bmp, lastUse)
             val g = Matcher.toGray(bmp, sc)
+            bmp.recycle()
+            if (!running) break
+
+            // vida crítica mesmo bebendo poção: para e avisa
+            if (cfg.panicPct > 0 && vit.hp >= 0) {
+                if (vit.hp < cfg.panicPct) {
+                    if (critSince == 0L) {
+                        critSince = t0
+                    } else if (t0 - critSince > cfg.panicSec * 1000L) {
+                        stopWith("⚠ Vida crítica (${vit.hp}%)! Bot parado.")
+                        break
+                    }
+                } else {
+                    critSince = 0L
+                }
+            }
+            // vida muito baixa: volta a olhar a vida logo, sem perder tempo procurando monstro
+            if (vit.urgent && urgentSkips < 6) {
+                urgentSkips++
+                svc.setStatus("Vida baixa (${vit.hp}%): bebendo poção…")
+                nap(120)
+                continue
+            }
+            urgentSkips = 0
+
             val x0 = g.w * cfg.mLeft / 100
             val x1 = g.w - g.w * cfg.mRight / 100
             val y0 = g.h * cfg.mTop / 100
@@ -306,20 +313,20 @@ class BotEngine(private val svc: BotService) {
             if (ps == null || movedRatio(ps, sg) > 0.10f) lastMoveAt = t0
             prevSig = sg
 
-            if (routeOn) {
+            if (routeActive) {
                 val rg = odoRegion(g, cfg)
                 if (!odo.update(g, rg[0], rg[1], rg[2], rg[3]) && odo.lost >= 8) {
-                    bmp.recycle()
-                    stopWith("⚠ Perdi a posição na rota. Leve o personagem ao ponto inicial e inicie de novo.")
-                    break
+                    // não dá para saber onde o personagem está: larga a rota e explora sozinho
+                    routeActive = false
+                    forceExplore = true
+                    svc.toast("Perdi a posição na rota (chão liso demais). Vou explorar sozinho.")
                 }
             }
 
             // alertas (boss, tela de morte...) em tela cheia, a cada 2 olhadas
             if (alerts.isNotEmpty() && scanN % 2 == 1) {
-                val al = best(g, alerts, 0, 0, g.w, g.h, cfg.monScore / 100f, false) { _, _ -> false }
+                val al = Vision.best(g, alerts, 0, 0, g.w, g.h, cfg.monScore / 100f, false, { running }) { _, _ -> false }
                 if (al != null) {
-                    bmp.recycle()
                     stopWith("⚠ ${al.t.t.name} na tela! Bot parado.")
                     break
                 }
@@ -327,11 +334,11 @@ class BotEngine(private val svc: BotService) {
 
             monIgn.removeAll { it[2] < t0 }
             itemIgn.removeAll { it[2] < t0 }
-            val mon = best(g, mons, x0, y0, x1, y1, cfg.monScore / 100f, cfg.nearest) { x, y ->
+            val mon = Vision.best(g, mons, x0, y0, x1, y1, cfg.monScore / 100f, cfg.nearest, { running }) { x, y ->
                 monIgn.any { Math.abs(it[0] - x) < 70 && Math.abs(it[1] - y) < 70 }
             }
-            val item: Found? = if (items.isNotEmpty() && running) {
-                best(g, items, x0, y0, x1, y1, cfg.itemScore / 100f, true) { x, y ->
+            val item: Vision.Found? = if (items.isNotEmpty() && running) {
+                Vision.best(g, items, x0, y0, x1, y1, cfg.itemScore / 100f, true, { running }) { x, y ->
                     itemIgn.any { Math.abs(it[0] - x) < 50 && Math.abs(it[1] - y) < 50 }
                 }
             } else null
@@ -339,27 +346,16 @@ class BotEngine(private val svc: BotService) {
                 clicks.clear()
                 lootStart = 0L
             }
-            val hpNow = actions(bmp, mon != null, lastUse)
-            bmp.recycle()
             if (!running) break
 
-            // vida crítica mesmo bebendo poção: para e avisa
-            if (cfg.panicPct > 0 && hpNow >= 0) {
-                if (hpNow < cfg.panicPct) {
-                    if (critSince == 0L) {
-                        critSince = t0
-                    } else if (t0 - critSince > cfg.panicSec * 1000L) {
-                        stopWith("⚠ Vida crítica ($hpNow%)! Bot parado.")
-                        break
-                    }
-                } else {
-                    critSince = 0L
-                }
-            }
+            // skills enquanto há monstro
+            if (mon != null) skills(bw, bh, lastUse)
+            if (!running) break
 
             // contagem de abates (aproximada)
             if (mon != null) {
                 lastMonSeen = t0
+                lastProgress = t0
                 missScans = 0
                 if (!inFight) {
                     inFight = true
@@ -377,6 +373,7 @@ class BotEngine(private val svc: BotService) {
             if (pendAt != 0L && t0 - pendAt > 600L) {
                 if (item == null || item.t.t !== pendT) {
                     stats.items++
+                    lastProgress = t0
                     pendAt = 0L
                     pendT = null
                 }
@@ -387,7 +384,7 @@ class BotEngine(private val svc: BotService) {
             if (item != null) {
                 if (mon == null || cfg.lootFirst) {
                     wantLoot = true
-                } else if (cfg.lootNearPct > 0 && (hpNow < 0 || hpNow >= 50)) {
+                } else if (cfg.lootNearPct > 0 && (vit.hp < 0 || vit.hp >= 50)) {
                     val dx = (item.hit.x - (x0 + x1) / 2).toDouble()
                     val dy = (item.hit.y - (y0 + y1) / 2).toDouble()
                     wantLoot = Math.hypot(dx, dy) < cfg.lootNearPct / 100.0 * g.w
@@ -410,7 +407,7 @@ class BotEngine(private val svc: BotService) {
                     pendT = null
                 } else {
                     svc.setStatus("Pegando: ${item.t.t.name} · ${stats.short()}")
-                    svc.tap(rx.toFloat(), ry.toFloat())
+                    svc.tap(rx + jit() / 2f, ry + jit() / 2f)
                     pendAt = now()
                     pendT = item.t.t
                     lastActivity = now()
@@ -441,7 +438,7 @@ class BotEngine(private val svc: BotService) {
                 val gap = if (moving) minOf(cfg.chaseSec, cfg.reclickSec) else cfg.reclickSec
                 if (t0 - lastClick >= (gap * 1000).toLong()) {
                     svc.setStatus((if (moving) "Perseguindo: " else "Atacando: ") + mon.t.t.name + " · " + stats.short())
-                    svc.tap(mx.toFloat(), (my + cfg.offsetPx).toFloat())
+                    svc.tap(mx + jit(), my + cfg.offsetPx + jit())
                     lastClick = now()
                 }
             } else if (items.isNotEmpty() && cfg.lootSweepSec > 0f && lastMonSeen > 0L &&
@@ -449,7 +446,7 @@ class BotEngine(private val svc: BotService) {
             ) {
                 // acabou de matar: espera o loot aparecer e varre o chão antes de sair andando
                 svc.setStatus("Varrendo o chão atrás de loot… · ${stats.short()}")
-            } else if (routeOn) {
+            } else if (routeActive) {
                 val tgt = route[ri]
                 val vx = tgt.x - odo.fx
                 val vy = tgt.y - odo.fy
@@ -483,11 +480,14 @@ class BotEngine(private val svc: BotService) {
                             // não anda mais (parede, obstáculo): pula este ponto
                             skips++
                             if (skips >= 4) {
-                                stopWith("⚠ Rota bloqueada. Veja onde o personagem está.")
-                                break
+                                // rota bloqueada: em vez de parar, explora sozinho
+                                routeActive = false
+                                forceExplore = true
+                                svc.toast("Rota bloqueada. Vou explorar sozinho.")
+                            } else {
+                                svc.setStatus("Caminho bloqueado, pulando ponto…")
+                                nextWp()
                             }
-                            svc.setStatus("Caminho bloqueado, pulando ponto…")
-                            nextWp()
                         } else {
                             // toca no chão na direção do ponto: a distância do toque é a distância real no mapa
                             var f = minOf(1f, cfg.wanderPct / 100f / dist)
@@ -509,7 +509,7 @@ class BotEngine(private val svc: BotService) {
                 } else {
                     svc.setStatus("Explorando… · ${stats.short()}")
                     // tocou no chão mas a tela não andou: parede na frente, troca de direção
-                    if (cfg.explore && lastExploreTap > 0L && t0 - lastExploreTap > 1200L && lastMoveAt < lastExploreTap) {
+                    if ((cfg.explore || forceExplore) && lastExploreTap > 0L && t0 - lastExploreTap > 1200L && lastMoveAt < lastExploreTap) {
                         blockedUntil[heading] = t0 + 25000
                         heading = pickHeading(t0, blockedUntil, heading)
                         lastExploreTap = 0L
@@ -545,7 +545,7 @@ class BotEngine(private val svc: BotService) {
                     val r = cfg.wanderPct / 100f * bw
                     var px = cxr
                     var py = cyr
-                    if (cfg.explore) {
+                    if (cfg.explore || forceExplore) {
                         // vai em linha reta; depois de várias andadas sem achar nada, troca de direção
                         exploreTaps++
                         if (exploreTaps > 8) {

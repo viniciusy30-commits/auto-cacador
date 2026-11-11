@@ -1,3 +1,15 @@
+#id 2026-11-11-a
+#titulo Reformulação da Hunt de Vampire
+- Motor refeito: a poção de vida agora é lida ANTES de procurar monstros e, com a vida muito baixa, o bot só cuida da poção até se recuperar
+- Procura de imagens até 4x mais rápida, e os nomes dos monstros não dependem mais do cenário atrás deles
+- Se perder a posição na rota (chão liso) ou a rota ficar bloqueada, o bot explora sozinho em vez de parar
+- Para e vibra se ficar minutos sem ver vampire nem pegar item (travado, perdido ou desconectado) — configurável em Ajustes
+- Novo botão "Testar o que o bot enxerga": mostra a tela do jogo com caixas em volta de vampires, itens e alertas, e a vida medida, sem tocar em nada
+- Aba Hunt virou um passo a passo e já aplica o perfil do Vampire Lair na primeira abertura
+- Loot do Red Vampire adicionado (Soldier Helmet, Armor, Legs e Silver Backpack); Vampire no 1º e 2º andar, Red Vampire só no 2º
+- Screenshot do Android com intervalo curto agora é tentado de novo em vez de contar como falha
+- Novos ajustes: tempo sem ação, limite de sessão e variação nos toques
+
 #id 2026-10-29-c
 #titulo Hunt de Vampire
 - Nova aba Hunt: assistente passo a passo para o Vampire Lair (Vampire Lv 100 e Red Vampire Lv 110)

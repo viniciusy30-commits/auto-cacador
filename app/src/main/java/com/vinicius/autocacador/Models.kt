@@ -74,6 +74,12 @@ class Cfg {
     var routeOn = false
     var routeHoldSec = 6
     var routePing = true
+    /** Para o bot se ficar tantos minutos sem ver monstro nem pegar item (travado, perdido, desconectado). 0 = desligado. */
+    var idleStopMin = 5
+    /** Para o bot depois de tantos minutos de sessão. 0 = sem limite. */
+    var maxRunMin = 0
+    /** Variação aleatória (px) nos toques no mundo, para não tocar sempre no mesmo pixel. */
+    var tapJitter = 6
 
     private fun ptJs(p: Pt?): Any =
         if (p == null) JSONObject.NULL else JSONObject().put("x", p.fx.toDouble()).put("y", p.fy.toDouble())
@@ -135,6 +141,9 @@ class Cfg {
         o.put("routeOn", routeOn)
         o.put("routeHoldSec", routeHoldSec)
         o.put("routePing", routePing)
+        o.put("idleStopMin", idleStopMin)
+        o.put("maxRunMin", maxRunMin)
+        o.put("tapJitter", tapJitter)
         return o
     }
 
@@ -207,6 +216,9 @@ class Cfg {
             c.routeOn = o.optBoolean("routeOn", false)
             c.routeHoldSec = o.optInt("routeHoldSec", 6)
             c.routePing = o.optBoolean("routePing", true)
+            c.idleStopMin = o.optInt("idleStopMin", 5)
+            c.maxRunMin = o.optInt("maxRunMin", 0)
+            c.tapJitter = o.optInt("tapJitter", 6)
             return c
         }
     }

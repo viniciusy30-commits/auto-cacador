@@ -217,13 +217,13 @@ class MainActivity : AppCompatActivity() {
         val cfg = Store.cfg
         val hero = card()
         hero.put(text("Bem-vindo!", 22f, Pal.TXT, true), 0)
-        hero.put(text("Este app olha a tela do seu jogo, acha o monstro pelo nome, ataca, usa poções e skills, troca de lugar pelo mapa quando não tem monstro e pega os itens do chão. Tudo é configurado aqui, passo a passo.", 14f, Pal.SUB), 6)
+        hero.put(text("Bot da hunt de Vampire do Rucoy Online. Ele olha a tela do jogo, acha o vampire pelo nome, ataca, persegue quem foge, bebe poção, usa skill, pega o loot e passeia pela hunt sozinho. Comece pela aba Hunt: ela guia cada passo.", 14f, Pal.SUB), 6)
         add(hero, 4)
 
         if (cfg.profile == "vampire") {
             val pc = card()
             pc.put(text("Perfil ativo: Hunt de Vampire", 15f, Pal.OK, true), 0)
-            pc.put(text("Siga o passo a passo na aba Hunt.", 12f, Pal.SUB), 2)
+            pc.put(text("Siga o passo a passo na aba Hunt e use \"Testar o que o bot enxerga\" antes de iniciar.", 12f, Pal.SUB), 2)
             add(pc, 10)
         }
 
@@ -257,16 +257,12 @@ class MainActivity : AppCompatActivity() {
             } else {
                 add(button("Iniciar bot", Pal.OK) {
                     if (nm == 0) {
-                        info("Falta o monstro", "Na aba Alvos, capture pelo menos o nome de 1 monstro.")
-                    } else if (Build.VERSION.SDK_INT < 30) {
-                        info("Android muito antigo", "Precisa de Android 11 ou mais novo.")
+                        info("Falta o monstro", "Na aba Hunt, capture pelo menos o nome de 1 vampire.")
                     } else {
-                        svc.showPanel()
-                        svc.engine.start()
-                        Toast.makeText(this, "Bot iniciado! Abra o jogo. Pare pelo painel flutuante.", Toast.LENGTH_LONG).show()
-                        moveTaskToBack(true)
+                        startHunt(svc)
                     }
                 }, 10)
+                add(testButton(), 10)
             }
         }
 
@@ -363,67 +359,89 @@ class MainActivity : AppCompatActivity() {
         add(c, 12)
     }
 
+    /** Liga o bot (e confirma o ponto de partida quando existe rota gravada). */
+    private fun startHunt(svc: BotService) {
+        if (Build.VERSION.SDK_INT < 30) {
+            info("Android muito antigo", "Precisa de Android 11 ou mais novo.")
+            return
+        }
+        fun go() {
+            svc.showPanel()
+            svc.engine.start()
+            Toast.makeText(this, "Bot iniciado! Abra o jogo no Vampire Lair. Pare pelo painel flutuante.", Toast.LENGTH_LONG).show()
+            moveTaskToBack(true)
+        }
+        val cfg = Store.cfg
+        if (cfg.routeOn && cfg.route.size >= 2) {
+            confirm("O personagem está EXATAMENTE no ponto onde você começou a gravar a rota? (Se não estiver, toque em Não, leve o personagem até lá e inicie de novo.)") { go() }
+        } else {
+            go()
+        }
+    }
+
+    /** Botão que abre o teste de detecção: mostra na tela o que o bot enxerga, sem tocar em nada. */
+    private fun testButton(): View = button("Testar o que o bot enxerga", Pal.ACC) {
+        val s = needService()
+        if (s != null) {
+            s.startTest()
+            moveTaskToBack(true)
+        }
+    }
+
     private fun pageHunt() {
         val cfg = Store.cfg
         val svc = BotService.inst
-        val active = cfg.profile == "vampire"
-        if (active) Vampire.ensure(cfg)
+        // na primeira vez já deixa tudo ajustado para o Vampire Lair
+        if (cfg.profile != "vampire" && cfg.targets.none { it.slot.isNotEmpty() }) Vampire.applyProfile(cfg)
+        Vampire.ensure(cfg)
+        Vampire.ensureActions(cfg)
 
         val hero = card()
         hero.put(text("Hunt de Vampire", 22f, Pal.TXT, true), 0)
-        hero.put(text("Vampire Lair: Vampire (Lv 100, 450 de vida) e Red Vampire (Lv 110, 530 de vida). Os dois FOGEM quando a vida deles fica vermelha, por isso este perfil persegue mais rápido, bebe poção mais cedo, varre o chão depois de cada abate e anda em linha reta trocando de direção quando bate na parede.\n\nDrops: Gold, Greater Health e Mana Potion, Life Pendant e peças do Soldier Set. O boss Vampire King (350.000 de vida) nasce na mesma região: capture o nome dele como alerta e o bot para quando ele aparecer.", 13f, Pal.SUB), 6)
-        hero.put(button(if (active) "Reaplicar perfil Vampire" else "Aplicar perfil Vampire", Pal.OK) {
-            confirm("Trocar os ajustes de busca, tempos e passeio pelos do perfil Vampire? Seus alvos capturados e botões continuam salvos.") {
-                Vampire.applyProfile(cfg)
-                Toast.makeText(this, "Perfil Vampire aplicado!", Toast.LENGTH_SHORT).show()
-                render(false)
-            }
-        }, 12)
+        hero.put(text("Vampire Lair: Vampire (Lv 100, enche o 1º andar) e Red Vampire (Lv 110, só no 2º andar). Com a vida baixa eles FOGEM de quem chega perto, por isso o bot persegue rápido, bebe poção cedo, varre o chão depois de cada abate e anda trocando de direção quando bate na parede.\n\nDrops: Gold, Greater Health e Mana Potion, Life Pendant e peças do Soldier Set. O boss Vampire King (350.000 de vida) nasce na mesma região: capture o nome dele como alerta e o bot para quando ele aparecer.", 13f, Pal.SUB), 6)
         add(hero, 4)
         statsCard()
-        if (!active) {
-            tip("Comece por aqui", "Toque em \"Aplicar perfil Vampire\". Ele ajusta o bot para o Vampire Lair e cria os espaços de captura (vampires, itens, alertas, poções).")
-            return
-        }
 
         val miss = Vampire.missing(cfg)
+        val hp = cfg.actions.firstOrNull { it.type == ActionType.HP && it.enabled }
+        val nMon = cfg.targets.count { !it.isItem && !it.alert && it.enabled && it.ready() }
+        val nLoot = cfg.targets.count { it.isItem && it.enabled && it.ready() }
+        val ready = miss.isEmpty() && svc != null
         val chk = card()
-        chk.put(text(if (miss.isEmpty()) "Pronto para caçar" else "Falta para começar", 16f, if (miss.isEmpty()) Pal.OK else Pal.WARN, true), 0)
-        if (miss.isEmpty()) {
-            chk.put(text("O essencial está configurado. Os itens e alertas abaixo são opcionais, mas quanto mais você capturar, melhor.", 12f, Pal.SUB), 4)
-        } else {
-            for (m in miss) chk.put(text("• $m", 13f, Pal.TXT), 4)
-        }
+        chk.put(text(if (ready) "Pronto para caçar" else "Passo a passo", 16f, if (ready) Pal.OK else Pal.WARN, true), 0)
+        chk.status("1. Serviço de acessibilidade", svc != null, if (svc != null) "ligado" else "ligue na aba Início")
+        chk.status("2. Nome do Vampire", nMon > 0, if (nMon > 0) "$nMon capturado(s)" else "capture abaixo")
+        chk.status("3. Botão da poção de vida", hp?.btn != null, if (hp?.btn != null) "definido" else "defina na aba Ações")
+        chk.status("4. Barra de vida", hp?.bar2 != null, if (hp?.bar2 != null) "definida" else "arraste uma linha na barra CHEIA (aba Ações)")
+        chk.status("Loot (recomendado)", nLoot > 0, if (nLoot > 0) "$nLoot item(ns)" else "nenhum ainda")
+        chk.status("Rota gravada (opcional)", cfg.route.size >= 2 && cfg.routeOn, if (cfg.route.size >= 2) "${cfg.route.size} pontos" else "o bot passeia sozinho")
+        val sg = Vampire.suggestions(cfg)
+        if (sg.isNotEmpty()) chk.put(text("Ajuda muito: " + sg.joinToString("; ") + ".", 12f, Pal.SUB), 10)
         add(chk, 12)
-        if (svc != null && miss.isEmpty()) {
+
+        if (svc != null) {
+            add(testButton(), 10)
             if (svc.engine.running) {
                 add(button("Parar bot", Pal.BAD) { svc.engine.stop(); render(false) }, 10)
+            } else if (miss.isEmpty()) {
+                add(button("Iniciar hunt", Pal.OK) { startHunt(svc) }, 10)
             } else {
-                add(button("Iniciar hunt", Pal.OK) {
-                    if (Build.VERSION.SDK_INT < 30) {
-                        info("Android muito antigo", "Precisa de Android 11 ou mais novo.")
-                    } else {
-                        svc.showPanel()
-                        svc.engine.start()
-                        Toast.makeText(this, "Bot iniciado! Abra o jogo no Vampire Lair. Pare pelo painel flutuante.", Toast.LENGTH_LONG).show()
-                        moveTaskToBack(true)
-                    }
-                }, 10)
+                tip("Falta para começar", miss.joinToString("\n") { "• $it" })
             }
-        } else if (svc == null) {
-            tip("Serviço desligado", "Ative o serviço de acessibilidade na aba Início para poder capturar e iniciar.")
+        } else {
+            tip("Serviço desligado", "Ative o serviço de acessibilidade na aba Início para poder capturar, testar e iniciar.")
         }
 
-        slotCard("1. Monstros", "Fique perto de um vampire com o nome aparecendo e capture o nome dele. Capture o Red Vampire também, se for caçar os dois.", Vampire.monsters)
+        slotCard("1. Monstros", "Fique perto de um vampire com o nome aparecendo e capture o nome dele. Capture o Red Vampire também, se for caçar o 2º andar.", Vampire.monsters)
         slotCard("2. Loot", "Mate um vampire e capture cada item caído no chão, um por vez (recorte justo no item). O bot só pega o que você capturou, então pule o que não quer.", Vampire.loot)
 
         val pots = card()
         pots.put(text("3. Poções e skills", 16f, Pal.TXT, true), 0)
-        pots.put(text("Poção de vida: aponte o botão dela e arraste uma linha na barra de vida CHEIA. O perfil bebe abaixo de 55% e, abaixo de 30%, bebe quase sem esperar a recarga. Para pela segurança se a vida ficar abaixo de 15% por 4 s.", 12f, Pal.SUB), 4)
+        pots.put(text("Poção de vida: aponte o botão dela e arraste uma linha na barra de vida CHEIA. O perfil bebe abaixo de 55% e, abaixo de 30%, bebe quase sem esperar a recarga. Para por segurança se a vida ficar abaixo de 15% por 4 s.", 12f, Pal.SUB), 4)
         for (a in cfg.actions) {
-            val ready = a.btn != null && (a.type == ActionType.SKILL || a.bar2 != null)
+            val ok = a.btn != null && (a.type == ActionType.SKILL || a.bar2 != null)
             val tail = if (!a.enabled) "desligada" else if (a.btn == null) "falta o botão" else if (a.type != ActionType.SKILL && a.bar2 == null) "falta a barra" else "ok"
-            pots.status(a.name, ready && a.enabled, tail)
+            pots.status(a.name, ok && a.enabled, tail)
         }
         pots.put(button("Configurar na aba Ações", Pal.ACC) { tab = 3; render(true) }, 12)
         add(pots, 12)
@@ -431,6 +449,18 @@ class MainActivity : AppCompatActivity() {
         routeCard()
 
         slotCard("4. Segurança (recomendado)", "Capture estes textos quando aparecerem. Se algum surgir na tela, o bot para na hora e o celular vibra.", Vampire.alerts)
+
+        val rs = card()
+        rs.put(text("Perfil do Vampire Lair", 16f, Pal.TXT, true), 0)
+        rs.put(text("Se você mexeu nos ajustes e quer voltar ao padrão do Vampire Lair, toque abaixo. Seus alvos e botões continuam salvos.", 12f, Pal.SUB), 4)
+        rs.put(button("Reaplicar perfil Vampire", Pal.CARD2) {
+            confirm("Trocar os ajustes de busca, tempos e passeio pelos do perfil Vampire?") {
+                Vampire.applyProfile(cfg)
+                Toast.makeText(this, "Perfil Vampire aplicado!", Toast.LENGTH_SHORT).show()
+                render(false)
+            }
+        }, 10)
+        add(rs, 12)
     }
 
     // ---------- ALVOS ----------
@@ -440,6 +470,7 @@ class MainActivity : AppCompatActivity() {
                 "• Recorte justo, só o texto do nome, sem muito cenário em volta.\n" +
                 "• Se o monstro tem nomes diferentes, capture um de cada.\n" +
                 "• Depois de trocar a resolução ou o tamanho da interface do jogo, capture de novo.")
+        add(testButton(), 12)
         targetSection(0)
         targetSection(1)
         targetSection(2)
@@ -840,6 +871,12 @@ class MainActivity : AppCompatActivity() {
             0, 40, cfg.panicPct, { if (it == 0) "desligado" else "$it%" }) { cfg.panicPct = it }
         slider("Tempo em vida crítica", "Quanto tempo a vida precisa ficar crítica antes de parar.",
             2, 15, cfg.panicSec, { "$it s" }) { cfg.panicSec = it }
+        slider("Parar se ficar sem ação", "Se passar tanto tempo sem ver monstro nem pegar item (travou, se perdeu ou caiu a conexão), o bot para e o celular vibra.",
+            0, 30, cfg.idleStopMin, { if (it == 0) "desligado" else "$it min" }) { cfg.idleStopMin = it }
+        slider("Limite de tempo da sessão", "Para o bot sozinho depois deste tempo. 0 = sem limite.",
+            0, 240, cfg.maxRunMin, { if (it == 0) "sem limite" else "$it min" }) { cfg.maxRunMin = it }
+        slider("Variação nos toques", "Os toques no mundo variam alguns pixels para não cair sempre no mesmo ponto.",
+            0, 20, cfg.tapJitter, { "$it px" }) { cfg.tapJitter = it }
         toggle("Pegar itens antes de atacar", "Ligado: se houver item no chão, pega primeiro. Desligado: só pega quando não houver monstro.", cfg.lootFirst) { cfg.lootFirst = it }
         add(text("Área de busca", 18f, Pal.TXT, true), 18)
         add(text("Ignore partes da tela onde aparece o nome do seu personagem, chat ou barras, para o app não confundir.", 12f, Pal.SUB), 4)

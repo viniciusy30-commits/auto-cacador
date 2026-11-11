@@ -1,12 +1,15 @@
 package com.vinicius.autocacador
 
 /**
- * Perfil da Hunt de Vampire (Vampire Lair do Rucoy Online).
+ * Perfil da Hunt de Vampire (Vampire Lair / Vampire Dungeon do Rucoy Online).
  *
- * Dados usados (wiki do Rucoy): Vampire Lv 100 (450 HP) e Red Vampire Lv 110 (530 HP).
- * Os dois FOGEM quando a vida deles fica vermelha. Drops: Gold, Greater Health Potion,
- * Greater Mana Potion, Life Pendant, Soldier Glove Left, Soldier Belt e Soldier Boots.
- * O boss Vampire King (350.000 HP) nasce na mesma região e avisa no chat.
+ * Dados conferidos na wiki do Rucoy (rucoy-online.fandom.com):
+ *  - Vampire (Lv 100): enche o 1º andar e também aparece no 2º. Com vida baixa ele FOGE de quem chega perto.
+ *    Gold 60–139. Drops: Greater Mana Potion, Greater Health Potion, Life Pendant (raro),
+ *    Soldier Glove Left, Soldier Belt, Soldier Boots.
+ *  - Red Vampire (Lv 110): só no 2º andar. Gold 76–150. Drops: Greater Mana/Health Potion, Life Pendant (raro),
+ *    Soldier Helmet, Soldier Armor, Soldier Legs, Silver Backpack. (A wiki avisa que a tabela está incompleta.)
+ *  - Vampire King: boss da região (350.000 de vida), avisa no chat. O bot só para quando ele aparece.
  */
 object Vampire {
     const val KIND_MON = 0
@@ -17,17 +20,21 @@ object Vampire {
 
     val monsters = listOf(
         Slot("vamp", "Vampire (Lv 100)", KIND_MON, "Recorte só o NOME que aparece em cima do Vampire."),
-        Slot("redvamp", "Red Vampire (Lv 110)", KIND_MON, "Recorte só o NOME que aparece em cima do Red Vampire.")
+        Slot("redvamp", "Red Vampire (Lv 110)", KIND_MON, "Só existe no 2º andar. Recorte só o NOME que aparece em cima dele.")
     )
 
     val loot = listOf(
-        Slot("item_gold", "Gold (moedas)", KIND_ITEM, "Moedas caídas no chão."),
+        Slot("item_gold", "Gold (moedas)", KIND_ITEM, "Moedas caídas no chão. É o loot mais comum: capture este primeiro."),
         Slot("item_ghp", "Greater Health Potion", KIND_ITEM, "A poção caída no chão."),
         Slot("item_gmp", "Greater Mana Potion", KIND_ITEM, "A poção caída no chão."),
-        Slot("item_pendant", "Life Pendant", KIND_ITEM, "O primeiro pendant do jogo. Capture assim que cair um."),
-        Slot("item_glove", "Soldier Glove Left", KIND_ITEM, "Peça do Soldier Set."),
-        Slot("item_belt", "Soldier Belt", KIND_ITEM, "Peça do Soldier Set."),
-        Slot("item_boots", "Soldier Boots", KIND_ITEM, "Peça do Soldier Set.")
+        Slot("item_pendant", "Life Pendant", KIND_ITEM, "Raro. Capture assim que cair um."),
+        Slot("item_glove", "Soldier Glove Left", KIND_ITEM, "Peça do Soldier Set (Vampire)."),
+        Slot("item_belt", "Soldier Belt", KIND_ITEM, "Peça do Soldier Set (Vampire)."),
+        Slot("item_boots", "Soldier Boots", KIND_ITEM, "Peça do Soldier Set (Vampire)."),
+        Slot("item_helmet", "Soldier Helmet", KIND_ITEM, "Peça do Soldier Set (Red Vampire)."),
+        Slot("item_armor", "Soldier Armor", KIND_ITEM, "Peça do Soldier Set (Red Vampire)."),
+        Slot("item_legs", "Soldier Legs", KIND_ITEM, "Peça do Soldier Set (Red Vampire)."),
+        Slot("item_backpack", "Silver Backpack", KIND_ITEM, "Cai do Red Vampire.")
     )
 
     val alerts = listOf(
@@ -71,6 +78,7 @@ object Vampire {
         if (c.actions.none { it.type == ActionType.SKILL }) {
             val a = BotAction("vamp_skill", "Skill 1", ActionType.SKILL)
             a.cooldownSec = 3f
+            a.enabled = false // liga quando você definir o botão da skill
             c.actions.add(a)
         }
     }
@@ -80,7 +88,7 @@ object Vampire {
         c.profile = "vampire"
         c.scanMs = 500          // olha a tela mais rápido: vampire bate forte
         c.reclickSec = 2.0f
-        c.chaseSec = 1.0f       // vampire foge com vida vermelha: reclica rápido enquanto ele se mexe
+        c.chaseSec = 1.0f       // vampire foge com vida baixa: reclica rápido enquanto ele se mexe
         c.offsetPx = 45
         c.monScore = 70
         c.itemScore = 72
@@ -97,6 +105,8 @@ object Vampire {
         c.noMonsterSec = 4f
         c.panicPct = 15         // vida crítica por 4 s mesmo bebendo: para e vibra
         c.panicSec = 4
+        c.idleStopMin = 5       // 5 min sem ver vampire nem pegar item: para e vibra
+        c.tapJitter = 6
         ensure(c)
         ensureActions(c)
         Store.save()
@@ -109,6 +119,15 @@ object Vampire {
         val hp = c.actions.firstOrNull { it.type == ActionType.HP && it.enabled }
         if (hp == null || hp.btn == null) out.add("definir o botão da poção de vida")
         else if (hp.bar2 == null) out.add("definir a barra de vida (arraste uma linha na barra cheia)")
+        return out
+    }
+
+    /** O que ainda ajudaria muito, mas não é obrigatório. */
+    fun suggestions(c: Cfg): List<String> {
+        val out = ArrayList<String>()
+        if (c.targets.none { it.slot == "item_gold" && it.ready() }) out.add("capturar o Gold (loot mais comum)")
+        if (c.targets.none { it.alert && it.enabled && it.ready() && it.slot == "king" }) out.add("capturar o nome do Vampire King (para o bot quando o boss aparece)")
+        if (c.route.size < 2) out.add("gravar a rota da hunt (ou deixar o passeio automático)")
         return out
     }
 }

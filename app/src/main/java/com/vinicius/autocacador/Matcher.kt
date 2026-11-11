@@ -10,6 +10,9 @@ object Matcher {
     class Tpl(val w: Int, val h: Int, val xs: IntArray, val ys: IntArray, val v: IntArray)
     class Hit(val x: Int, val y: Int, val score: Float)
 
+    /** Diferença de cinza aceita para um ponto da foto "bater" com a tela. */
+    private const val TOL = 30
+
     fun toGray(b: Bitmap, s: Int): Gray {
         val w = b.width / s
         val h = b.height / s
@@ -31,19 +34,41 @@ object Matcher {
         return Gray(w, h, out)
     }
 
-    /** mask = true: usa só os pixels que contrastam com o fundo (bom para texto/nome). */
+    /**
+     * mask = true (nomes/textos): guarda só os pontos do TEXTO (o grupo de contraste mais numeroso)
+     * e uma parte menor do contorno do outro lado. Assim o cenário atrás do nome pesa pouco e o
+     * mesmo nome é achado em qualquer chão.
+     * mask = false (itens): usa a imagem inteira.
+     */
     fun makeTpl(g: Gray, mask: Boolean): Tpl? {
         val n = g.w * g.h
         if (n < 20) return null
         val all = IntArray(n) { g.d[it].toInt() and 255 }
-        val sorted = all.sortedArray()
-        val med = sorted[n / 2]
+        val rnd = Random(7)
         val idx = ArrayList<Int>()
-        for (i in 0 until n) {
-            if (!mask || Math.abs(all[i] - med) >= 40) idx.add(i)
+        if (!mask) {
+            for (i in 0 until n) idx.add(i)
+            idx.shuffle(rnd)
+        } else {
+            val med = all.sortedArray()[n / 2]
+            val hi = ArrayList<Int>()
+            val lo = ArrayList<Int>()
+            for (i in 0 until n) {
+                val dv = all[i] - med
+                if (dv >= 40) hi.add(i) else if (dv <= -40) lo.add(i)
+            }
+            if (hi.size + lo.size < 12) return null
+            val main = if (hi.size >= lo.size) hi else lo
+            val side = if (hi.size >= lo.size) lo else hi
+            main.shuffle(rnd)
+            side.shuffle(rnd)
+            val mainTake = minOf(main.size, 380)
+            val sideTake = minOf(side.size, mainTake / 3, 120)
+            for (k in 0 until mainTake) idx.add(main[k])
+            for (k in 0 until sideTake) idx.add(side[k])
+            idx.shuffle(rnd)
         }
         if (idx.size < 12) return null
-        idx.shuffle(Random(7))
         val m = minOf(idx.size, 500)
         val xs = IntArray(m)
         val ys = IntArray(m)
@@ -57,74 +82,75 @@ object Matcher {
         return Tpl(g.w, g.h, xs, ys, vs)
     }
 
-    fun find(g: Gray, t: Tpl, x0: Int, y0: Int, x1: Int, y1: Int, minScore: Float): Hit? {
-        val n = t.v.size
-        if (n < 12) return null
-        val tol = 30
-        val maxMiss = ((1f - minScore) * n).toInt()
-        var bestMiss = maxMiss + 1
-        var best: Hit? = null
-        val stage = minOf(24, n)
-        val stageAllowed = (maxMiss.toFloat() * stage / n * 1.6f).toInt() + 2
-        val d = g.d
-        val gw = g.w
-        var y = y0
-        while (y <= y1 - t.h) {
-            var x = x0
-            while (x <= x1 - t.w) {
-                var miss = 0
-                var i = 0
-                while (i < n) {
-                    val gv = d[(y + t.ys[i]) * gw + x + t.xs[i]].toInt() and 255
-                    val df = gv - t.v[i]
-                    if (df > tol || df < -tol) {
-                        miss++
-                        if (miss >= bestMiss) break
-                    }
-                    i++
-                    if (i == stage && miss > stageAllowed) break
-                }
-                if (i >= n && miss < bestMiss) {
-                    bestMiss = miss
-                    best = Hit(x + t.w / 2, y + t.h / 2, 1f - miss.toFloat() / n)
-                }
-                x++
+    private fun missAt(d: ByteArray, gw: Int, t: Tpl, x: Int, y: Int, limit: Int): Int {
+        var miss = 0
+        for (i in t.v.indices) {
+            val df = (d[(y + t.ys[i]) * gw + x + t.xs[i]].toInt() and 255) - t.v[i]
+            if (df > TOL || df < -TOL) {
+                miss++
+                if (miss > limit) return miss
             }
-            y++
         }
-        return best
+        return miss
     }
 
-    /** Todos os acertos, sem repetir o mesmo lugar. */
+    /**
+     * Todos os acertos, sem repetir o mesmo lugar. Busca de 2 em 2 pixels (4x mais rápida)
+     * com margem maior e depois refina cada candidato pixel a pixel.
+     */
     fun findAll(g: Gray, t: Tpl, x0: Int, y0: Int, x1: Int, y1: Int, minScore: Float): List<Hit> {
         val n = t.v.size
         if (n < 12) return emptyList()
-        val tol = 30
         val maxMiss = ((1f - minScore) * n).toInt()
+        val coarseMax = maxMiss + maxOf(3, n / 12)
         val stage = minOf(24, n)
-        val stageAllowed = (maxMiss.toFloat() * stage / n * 1.6f).toInt() + 2
+        val stageAllowed = (coarseMax.toFloat() * stage / n * 1.6f).toInt() + 2
         val d = g.d
         val gw = g.w
-        val raw = ArrayList<Hit>()
-        var y = y0
-        while (y <= y1 - t.h && raw.size < 3000) {
-            var x = x0
-            while (x <= x1 - t.w) {
+        val xs0 = maxOf(x0, 0)
+        val ys0 = maxOf(y0, 0)
+        val xe = minOf(x1, g.w) - t.w
+        val ye = minOf(y1, g.h) - t.h
+        val cand = ArrayList<IntArray>()
+        var y = ys0
+        while (y <= ye && cand.size < 1500) {
+            var x = xs0
+            while (x <= xe) {
                 var miss = 0
                 var i = 0
                 while (i < n) {
                     val df = (d[(y + t.ys[i]) * gw + x + t.xs[i]].toInt() and 255) - t.v[i]
-                    if (df > tol || df < -tol) {
+                    if (df > TOL || df < -TOL) {
                         miss++
-                        if (miss > maxMiss) break
+                        if (miss > coarseMax) break
                     }
                     i++
                     if (i == stage && miss > stageAllowed) break
                 }
-                if (i >= n && miss <= maxMiss) raw.add(Hit(x + t.w / 2, y + t.h / 2, 1f - miss.toFloat() / n))
-                x++
+                if (i >= n && miss <= coarseMax) cand.add(intArrayOf(x, y, miss))
+                x += 2
             }
-            y++
+            y += 2
+        }
+        val raw = ArrayList<Hit>()
+        for (c in cand) {
+            var bm = Int.MAX_VALUE
+            var bx = c[0]
+            var by = c[1]
+            for (dy in -1..1) {
+                for (dx in -1..1) {
+                    val xx = c[0] + dx
+                    val yy = c[1] + dy
+                    if (xx < xs0 || yy < ys0 || xx > xe || yy > ye) continue
+                    val m = missAt(d, gw, t, xx, yy, minOf(bm, maxMiss))
+                    if (m < bm) {
+                        bm = m
+                        bx = xx
+                        by = yy
+                    }
+                }
+            }
+            if (bm <= maxMiss) raw.add(Hit(bx + t.w / 2, by + t.h / 2, 1f - bm.toFloat() / n))
         }
         raw.sortByDescending { it.score }
         val out = ArrayList<Hit>()
